@@ -20,6 +20,11 @@ STOP_TIMEOUT="${STOP_TIMEOUT:-60}"
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
 
+# Nombre de potions attendu, deduit du code source pour rester juste quand on
+# en ajoute (plutot qu'une constante a maintenir en double).
+MOD_SOURCE="src/main/java/com/spatulox/ExtendedTimePotion.java"
+EXPECTED_POTIONS="${EXPECTED_POTIONS:-$(grep -c '= registerPotion(' "$MOD_SOURCE")}"
+
 FIFO_DIR="$(mktemp -d)"
 FIFO="$FIFO_DIR/server-stdin"
 GRADLE_PID=""
@@ -122,6 +127,23 @@ if grep -qE "$FATAL_PATTERNS" "$LOG"; then
     echo "--- lignes fatales detectees ---"
     grep -nE "$FATAL_PATTERNS" "$LOG" || true
     fail "erreur fatale detectee dans le log"
+fi
+
+# --- le mod a-t-il reellement fonctionne ? --------------------------------
+# "le serveur demarre" ne prouve pas que le mod fait son travail : un registre
+# vide ou un callback de brassage qui n'a jamais tourne passeraient inapercus.
+# Ces deux marqueurs sont emis par ExtendedTimePotion.onInitialize().
+if ! grep -q 'Brewing mixes registered' "$LOG"; then
+    fail "le callback de brassage de Fabric API n'a pas tourne (FabricPotionBrewingBuilder casse ?)"
+fi
+
+POTIONS="$(sed -n 's/.*Registered \([0-9]\{1,\}\) potions.*/\1/p' "$LOG" | head -n 1)"
+if [ -z "$POTIONS" ]; then
+    fail "le mod n'a pas signale le nombre de potions enregistrees"
+fi
+echo "==> Potions enregistrees : $POTIONS (attendu : $EXPECTED_POTIONS)"
+if [ "$POTIONS" -ne "$EXPECTED_POTIONS" ]; then
+    fail "$POTIONS potions enregistrees au lieu de $EXPECTED_POTIONS"
 fi
 
 # --- arret propre ---------------------------------------------------------

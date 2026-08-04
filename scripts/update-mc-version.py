@@ -19,6 +19,18 @@ Exemples
     # sortie machine (utilisee par le workflow GitHub)
     python3 scripts/update-mc-version.py --json
 
+    # APRES un build + test serveur reussis : marquer la version comme compatible
+    python3 scripts/update-mc-version.py --mark-supported
+
+Compatibilite
+-------------
+Ce script ne touche PAS a supported_minecraft_versions lors d'une mise a jour.
+Cette liste est ce qui est annonce comme compatible sur Modrinth et CurseForge :
+rien, au moment de resoudre les versions, ne prouve que le mod fonctionne
+reellement sur la nouvelle version de Minecraft (l'API de Fabric peut avoir
+change sous les pieds du mod). Seul --mark-supported l'ecrit, et il est destine
+a etre appele apres que le build et le test serveur headless soient passes.
+
 Codes de sortie
 ---------------
     0  succes (mise a jour effectuee, ou deja a jour)
@@ -136,6 +148,29 @@ def major_of(version: str) -> str:
     return version.split(".", 1)[0]
 
 
+def parse_version(version: str) -> tuple[int, ...] | None:
+    """(26, 1, 2) pour "26.1.2". None si ce n'est pas purement numerique."""
+    parts = []
+    for chunk in version.split("."):
+        if not chunk.isdigit():
+            return None
+        parts.append(int(chunk))
+    return tuple(parts) if parts else None
+
+
+def is_regression(target: str, current: str) -> bool:
+    """True si on redescend vers une version anterieure.
+
+    En cas de doute (version non numerique, snapshot...) on repond False :
+    mieux vaut ne rien reinitialiser que de le faire a tort.
+    """
+    parsed_target = parse_version(target)
+    parsed_current = parse_version(current)
+    if parsed_target is None or parsed_current is None:
+        return False
+    return parsed_target < parsed_current
+
+
 def write_preserving_final_newline(path: Path, original: str, new: str) -> None:
     """Ecrit `new` en conservant la presence (ou l'absence) de newline final."""
     if original.endswith("\n") and not new.endswith("\n"):
@@ -150,6 +185,7 @@ def update_gradle_properties(
     loader_version: str,
     fabric_api_version: str,
     major_changed: bool,
+    regression: bool,
     dry_run: bool,
 ) -> tuple[bool, list[str]]:
     original = GRADLE_PROPERTIES.read_text(encoding="utf-8")
@@ -159,20 +195,50 @@ def update_gradle_properties(
     text = set_property(text, "loader_version", loader_version)
     text = set_property(text, "fabric_api_version", fabric_api_version)
 
+    # supported_minecraft_versions n'est PAS touche ici : c'est une affirmation
+    # de compatibilite publiee sur Modrinth/CurseForge, et rien a ce stade ne
+    # prouve que le mod fonctionne sur cette version. Seul --mark-supported,
+    # appele apres un build + test serveur reussis, a le droit de l'ecrire.
     supported_raw = read_property(text, "supported_minecraft_versions") or ""
     supported = [v.strip() for v in supported_raw.split(",") if v.strip()]
-    if major_changed:
-        # nouveau major : les anciennes versions ne sont plus couvertes par la
-        # borne depends.minecraft de fabric.mod.json
+    if regression:
+        # Retour volontaire vers une version anterieure : la liste ne doit pas
+        # continuer d'annoncer les versions qu'on vient d'abandonner. On la
+        # reinitialise tout de suite, sans attendre de preuve de compatibilite.
         supported = [minecraft_version]
-    elif minecraft_version not in supported:
-        supported.append(minecraft_version)
-    text = set_property(text, "supported_minecraft_versions", ",".join(supported))
+        text = set_property(text, "supported_minecraft_versions", minecraft_version)
+    elif major_changed:
+        # nouveau major : les anciennes versions ne sont plus couvertes par la
+        # borne depends.minecraft de fabric.mod.json, on repart de zero
+        text = set_property(text, "supported_minecraft_versions", "")
+        supported = []
 
     changed = text != original
     if changed and not dry_run:
         write_preserving_final_newline(GRADLE_PROPERTIES, original, text)
     return changed, supported
+
+
+def mark_supported(dry_run: bool) -> tuple[str, list[str]]:
+    """Ajoute le minecraft_version courant a supported_minecraft_versions.
+
+    A n'appeler qu'apres un build et un test serveur reussis : cette liste est
+    ce qui est annonce comme compatible sur Modrinth et CurseForge.
+    """
+    original = GRADLE_PROPERTIES.read_text(encoding="utf-8")
+    current = read_property(original, "minecraft_version")
+    if not current:
+        raise Failure("minecraft_version absent de gradle.properties")
+
+    supported_raw = read_property(original, "supported_minecraft_versions") or ""
+    supported = [v.strip() for v in supported_raw.split(",") if v.strip()]
+    if current not in supported:
+        supported.append(current)
+
+    text = set_property(original, "supported_minecraft_versions", ",".join(supported))
+    if text != original and not dry_run:
+        write_preserving_final_newline(GRADLE_PROPERTIES, original, text)
+    return current, supported
 
 
 def update_fabric_mod_json(minecraft_version: str, dry_run: bool) -> str | None:
@@ -232,6 +298,13 @@ def main() -> int:
         action="store_true",
         help="continuer meme si la version est deja celle du repo",
     )
+    parser.add_argument(
+        "--mark-supported",
+        action="store_true",
+        help="ajoute le minecraft_version courant a supported_minecraft_versions. "
+        "A n'utiliser QU'APRES un build et un test serveur reussis : cette liste "
+        "est ce qui est annonce comme compatible sur Modrinth/CurseForge.",
+    )
     args = parser.parse_args()
 
     quiet = args.json
@@ -243,6 +316,22 @@ def main() -> int:
     for path in (GRADLE_PROPERTIES, FABRIC_MOD_JSON):
         if not path.exists():
             raise Failure(f"{path} introuvable — lance le script depuis le depot")
+
+    if args.mark_supported:
+        version, supported = mark_supported(args.dry_run)
+        log(f"Minecraft {version} marque comme compatible.")
+        log(f"  supported_minecraft_versions = {','.join(supported)}")
+        if args.dry_run:
+            log("\n--dry-run : aucun fichier modifie.")
+        result = {
+            "status": "marked-supported",
+            "minecraft_version": version,
+            "supported_minecraft_versions": supported,
+        }
+        if args.json:
+            print(json.dumps(result, indent=2))
+        emit_github_output(result)
+        return 0
 
     current = read_property(
         GRADLE_PROPERTIES.read_text(encoding="utf-8"), "minecraft_version"
@@ -294,19 +383,32 @@ def main() -> int:
     log(f"  fabric_api_version = {fabric_api}")
 
     major_changed = major_of(target) != major_of(current)
+    regression = is_regression(target, current)
+    if regression:
+        log(f"\n  Regression {current} -> {target} : supported_minecraft_versions")
+        log(f"  est reinitialise a {target} (pas de test de compatibilite requis).")
     changed, supported = update_gradle_properties(
-        target, loader, fabric_api, major_changed, args.dry_run
+        target, loader, fabric_api, major_changed, regression, args.dry_run
     )
 
     new_range = None
     if major_changed:
         new_range = update_fabric_mod_json(target, args.dry_run)
 
-    log(f"  supported_minecraft_versions = {','.join(supported)}")
+    log(f"  supported_minecraft_versions = {','.join(supported) or '(vide)'}")
     if new_range:
         log(f"  fabric.mod.json depends.minecraft = {new_range}")
     elif major_changed:
         log("  fabric.mod.json : deja bon")
+
+    if target not in supported:
+        log(
+            f"\n  /!\\ Minecraft {target} n'est PAS marque comme compatible.\n"
+            f"      Compatibilite non prouvee a ce stade. Lance le build et le test\n"
+            f"      serveur, puis, s'ils passent :\n"
+            f"        ./gradlew build && bash .github/scripts/headless-server-test.sh\n"
+            f"        python3 scripts/update-mc-version.py --mark-supported"
+        )
 
     result.update(
         {

@@ -101,6 +101,14 @@ jobs:
         continue-on-error: true
         run: bash .github/scripts/headless-server-test.sh
 
+      # C'est ici, et nulle part ailleurs, que la compatibilite est actee :
+      # supported_minecraft_versions pilote ce qui est annonce sur Modrinth et
+      # CurseForge, donc on ne l'ecrit qu'apres une preuve de fonctionnement
+      # (build + serveur qui demarre + potions et brassage verifies dans le log).
+      - name: Marquer la version comme compatible
+        if: steps.build.outcome == 'success' && steps.smoke.outcome == 'success'
+        run: python3 scripts/update-mc-version.py --mark-supported
+
       - name: Upload logs
         if: steps.update.outputs.status == 'updated'
         uses: actions/upload-artifact@v4
@@ -171,7 +179,7 @@ jobs:
 
           - [ ] Bumper \`mod_version\` dans \`gradle.properties\` (non touche automatiquement : c'est une decision de release)
           - [ ] Ajouter une entree \`## <version>\` en haut de \`CHANGELOG.md\` — c'est elle qui est publiee sur Modrinth/CurseForge
-          - [ ] Verifier \`supported_minecraft_versions\`
+          - [ ] Verifier \`supported_minecraft_versions\` (ajoute automatiquement **uniquement** si le build et le test serveur sont passes ; laisse intact sinon)
           - [ ] Tester le brassage en jeu (nugget d'or 8:00 -> 11:00, carotte doree 11:00 -> 15:00)
 
           > \`loom_version\` n'est pas mis a jour automatiquement (\`1.17-SNAPSHOT\`, dependance snapshot volontaire). Si le build echoue sur des mappings, verifier la derniere version de fabric-loom.
