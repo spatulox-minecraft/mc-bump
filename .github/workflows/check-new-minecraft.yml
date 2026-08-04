@@ -1,0 +1,196 @@
+name: Nouvelle version Minecraft
+
+on:
+  schedule:
+    # mercredi 06:00 UTC, aligne sur le rythme de sortie de Mojang
+    - cron: '0 6 * * 3'
+  workflow_dispatch:
+    inputs:
+      minecraft_version:
+        description: "Forcer une version Minecraft precise (ex: 26.2). Vide = derniere release."
+        required: false
+        type: string
+      force:
+        description: "Continuer meme si la version est deja celle du repo"
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: mc-update
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update-and-test:
+    name: Detecter, mettre a jour et tester
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # Toute la resolution de versions + l'edition des fichiers vit dans
+      # scripts/update-mc-version.py, pour que le CI et l'usage local partagent
+      # exactement le meme code. Le script alimente $GITHUB_OUTPUT tout seul.
+      - name: Resoudre et appliquer les versions
+        id: update
+        env:
+          INPUT_MC: ${{ inputs.minecraft_version }}
+          INPUT_FORCE: ${{ inputs.force }}
+        run: |
+          set -euo pipefail
+
+          ARGS=()
+          if [ -n "${INPUT_MC:-}" ]; then ARGS+=("$INPUT_MC"); fi
+          if [ "${INPUT_FORCE:-false}" = "true" ]; then ARGS+=(--force); fi
+
+          rc=0
+          python3 scripts/update-mc-version.py ${ARGS[@]+"${ARGS[@]}"} || rc=$?
+
+          # 0 = ok / deja a jour, 2 = Fabric pas encore pret (sortie normale),
+          # 1 = vraie erreur
+          if [ "$rc" -eq 1 ]; then
+            echo "::error::echec de la resolution des versions"
+            exit 1
+          fi
+
+      - name: Resume
+        if: steps.update.outputs.status != 'updated'
+        env:
+          STATUS: ${{ steps.update.outputs.status }}
+          MC: ${{ steps.update.outputs.minecraft_version }}
+        run: |
+          if [ "$STATUS" = "up-to-date" ]; then
+            echo "### Deja a jour sur Minecraft \`$MC\` :white_check_mark:" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### Fabric ne supporte pas encore Minecraft \`$MC\` :hourglass:" >> "$GITHUB_STEP_SUMMARY"
+            echo "On retentera au prochain passage du cron." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Diff applique
+        if: steps.update.outputs.status == 'updated'
+        run: git --no-pager diff
+
+      # --- Build + test headless ------------------------------------------
+      - name: Set up JDK 25
+        if: steps.update.outputs.status == 'updated'
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+
+      - name: Set up Gradle
+        if: steps.update.outputs.status == 'updated'
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build
+        id: build
+        if: steps.update.outputs.status == 'updated'
+        continue-on-error: true
+        run: |
+          chmod +x gradlew
+          ./gradlew build --stacktrace
+
+      - name: Test serveur headless
+        id: smoke
+        if: steps.update.outputs.status == 'updated' && steps.build.outcome == 'success'
+        continue-on-error: true
+        run: bash .github/scripts/headless-server-test.sh
+
+      - name: Upload logs
+        if: steps.update.outputs.status == 'updated'
+        uses: actions/upload-artifact@v4
+        with:
+          name: server-logs-${{ steps.update.outputs.minecraft_version }}
+          path: |
+            server-test.log
+            run/logs/
+          retention-days: 30
+          if-no-files-found: ignore
+
+      # --- Pull request ----------------------------------------------------
+      - name: Rediger le corps de la PR
+        id: body
+        if: steps.update.outputs.status == 'updated'
+        env:
+          MC: ${{ steps.update.outputs.minecraft_version }}
+          PREVIOUS: ${{ steps.update.outputs.previous_version }}
+          LOADER: ${{ steps.update.outputs.loader_version }}
+          FABRIC_API: ${{ steps.update.outputs.fabric_api_version }}
+          BUILD: ${{ steps.build.outcome }}
+          SMOKE: ${{ steps.smoke.outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          icon() {
+            if [ "$1" = "success" ]; then echo ":white_check_mark:"; else echo ":x:"; fi
+          }
+
+          if [ "$SMOKE" = "skipped" ]; then
+            SMOKE_TXT=":heavy_minus_sign: non execute (build KO)"
+          else
+            SMOKE_TXT="$(icon "$SMOKE") $SMOKE"
+          fi
+
+          if [ "$BUILD" = "success" ] && [ "$SMOKE" = "success" ]; then
+            echo "draft=false" >> "$GITHUB_OUTPUT"
+            VERDICT=":white_check_mark: **Le mod compile et le serveur demarre sur Minecraft \`$MC\`.**"
+          else
+            echo "draft=true" >> "$GITHUB_OUTPUT"
+            VERDICT=":x: **Le mod ne fonctionne pas tel quel sur Minecraft \`$MC\`** — PR en brouillon, le diff des dependances est deja fait pour partir de la."
+          fi
+
+          cat > pr-body.md <<EOF
+          Mise a jour automatique vers **Minecraft \`$MC\`** (precedent : \`$PREVIOUS\`).
+
+          $VERDICT
+
+          ## Versions resolues
+
+          | | version |
+          |---|---|
+          | Minecraft | \`$MC\` |
+          | Fabric Loader | \`$LOADER\` |
+          | Fabric API | \`$FABRIC_API\` |
+
+          ## Resultats
+
+          | etape | resultat |
+          |---|---|
+          | \`./gradlew build\` | $(icon "$BUILD") $BUILD |
+          | serveur headless | $SMOKE_TXT |
+
+          Le log complet du serveur est disponible dans les artifacts du [run]($RUN_URL).
+
+          ## A faire a la main avant de merger
+
+          - [ ] Bumper \`mod_version\` dans \`gradle.properties\` (non touche automatiquement : c'est une decision de release)
+          - [ ] Ajouter une entree \`## <version>\` en haut de \`CHANGELOG.md\` — c'est elle qui est publiee sur Modrinth/CurseForge
+          - [ ] Verifier \`supported_minecraft_versions\`
+          - [ ] Tester le brassage en jeu (nugget d'or 8:00 -> 11:00, carotte doree 11:00 -> 15:00)
+
+          > \`loom_version\` n'est pas mis a jour automatiquement (\`1.17-SNAPSHOT\`, dependance snapshot volontaire). Si le build echoue sur des mappings, verifier la derniere version de fabric-loom.
+
+          ---
+          Genere par \`.github/workflows/check-new-minecraft.yml\` via \`scripts/update-mc-version.py\`
+          EOF
+
+      - name: Creer la Pull Request
+        if: steps.update.outputs.status == 'updated'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          branch: chore/mc-${{ steps.update.outputs.minecraft_version }}
+          delete-branch: true
+          draft: ${{ steps.body.outputs.draft }}
+          commit-message: "chore: support Minecraft ${{ steps.update.outputs.minecraft_version }}"
+          title: "chore: support Minecraft ${{ steps.update.outputs.minecraft_version }}"
+          body-path: pr-body.md
+          labels: minecraft-update
+          add-paths: |
+            gradle.properties
+            src/main/resources/fabric.mod.json
