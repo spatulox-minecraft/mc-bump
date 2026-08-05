@@ -60,6 +60,7 @@ jobs:
           SUPPORTED="$(prop supported_minecraft_versions)"
           LOADER="$(prop loader_version)"
           FABRIC_API="$(prop fabric_api_version)"
+          LOOM="$(prop loom_version)"
           RANGE="$(python3 -c "import json;print(json.load(open('src/main/resources/fabric.mod.json'))['depends']['minecraft'])")"
 
           git config user.name "github-actions[bot]"
@@ -68,7 +69,8 @@ jobs:
             -m "supported_minecraft_versions: $SUPPORTED
           depends.minecraft: $RANGE
           fabric-loader: $LOADER
-          fabric-api: $FABRIC_API"
+          fabric-api: $FABRIC_API
+          fabric-loom: $LOOM"
           git push origin "$TAG"
 
           {
@@ -81,4 +83,5 @@ jobs:
             echo "| \`depends.minecraft\` | \`$RANGE\` |"
             echo "| Fabric Loader | \`$LOADER\` |"
             echo "| Fabric API | \`$FABRIC_API\` |"
+            echo "| fabric-loom | \`$LOOM\` |"
           } >> "$GITHUB_STEP_SUMMARY"

@@ -3,6 +3,11 @@
 Resolve the Fabric versions matching a Minecraft version and update
 gradle.properties and src/main/resources/fabric.mod.json.
 
+Four versions are resolved: Minecraft (Mojang manifest), Fabric Loader and
+Fabric API (both checked against the target Minecraft version), and fabric-loom,
+the build plugin, taken as the latest stable release from the Fabric Maven so the
+build stays reproducible. Use --loom to pin it.
+
 Standard library only: no pip install required.
 
 Examples
@@ -76,6 +81,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
+from xml.etree import ElementTree
 
 USER_AGENT = "spatulox-minecraft/ExtendedTimePotion (version updater)"
 TIMEOUT = 30
@@ -83,6 +89,7 @@ TIMEOUT = 30
 MOJANG_MANIFEST = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json"
 FABRIC_META = "https://meta.fabricmc.net/v2/versions"
 MODRINTH_FABRIC_API = "https://api.modrinth.com/v2/project/fabric-api/version"
+LOOM_METADATA = "https://maven.fabricmc.net/net/fabricmc/fabric-loom/maven-metadata.xml"
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 GRADLE_PROPERTIES = REPO_ROOT / "gradle.properties"
@@ -99,34 +106,42 @@ class Failure(Exception):
 # --------------------------------------------------------------------------
 # HTTP
 # --------------------------------------------------------------------------
-def get_json(
+def http_get(
     url: str,
     params: dict[str, str] | None = None,
     allow_status: tuple[int, ...] = (),
-):
-    """GET a JSON document.
+) -> str:
+    """GET a document as text.
 
-    Any HTTP error raises, EXCEPT the statuses listed in allow_status, whose
-    body is parsed and returned. Without that distinction a 5xx from an upstream
-    API would be indistinguishable from a legitimate "not published yet" answer,
-    and the workflow would silently stop updating while staying green.
+    Any HTTP error raises, EXCEPT the statuses listed in allow_status, whose body
+    is returned instead. Without that distinction a 5xx from an upstream API
+    would be indistinguishable from a legitimate "not published yet" answer, and
+    the workflow would silently stop updating while staying green.
     """
     if params:
         url = f"{url}?{urllib.parse.urlencode(params)}"
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     try:
         with urllib.request.urlopen(request, timeout=TIMEOUT) as response:
-            return json.loads(response.read().decode("utf-8"))
+            return response.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         if exc.code not in allow_status:
             raise Failure(f"HTTP {exc.code} from {url}") from exc
-        body = exc.read().decode("utf-8", errors="replace")
-        try:
-            return json.loads(body)
-        except json.JSONDecodeError:
-            raise Failure(f"HTTP {exc.code} from {url}, body is not JSON") from exc
+        return exc.read().decode("utf-8", errors="replace")
     except urllib.error.URLError as exc:
         raise Failure(f"cannot reach {url}: {exc.reason}") from exc
+
+
+def get_json(
+    url: str,
+    params: dict[str, str] | None = None,
+    allow_status: tuple[int, ...] = (),
+):
+    body = http_get(url, params, allow_status)
+    try:
+        return json.loads(body)
+    except json.JSONDecodeError as exc:
+        raise Failure(f"invalid JSON from {url}") from exc
 
 
 # --------------------------------------------------------------------------
@@ -161,6 +176,35 @@ def loader_for(minecraft_version: str) -> str | None:
         if loader.get("stable"):
             return loader.get("version")
     return None
+
+
+# A stable Loom version is purely numeric: this rejects 1.18.0-alpha.9 and
+# 1.17-SNAPSHOT without having to enumerate every pre-release marker.
+STABLE_LOOM = re.compile(r"^\d+(?:\.\d+)*$")
+
+
+def latest_stable_loom() -> str:
+    """Latest stable fabric-loom from the Fabric Maven metadata.
+
+    The metadata lists versions in PUBLICATION order, not version order
+    (1.17.14 comes after 1.18.0-alpha.4), so the list is sorted numerically
+    rather than read from the end. <release> is not used either: nothing stops
+    it from pointing at a pre-release, which is not a SNAPSHOT.
+    """
+    body = http_get(LOOM_METADATA)
+    try:
+        root = ElementTree.fromstring(body)
+    except ElementTree.ParseError as exc:
+        raise Failure(f"invalid XML from {LOOM_METADATA}") from exc
+
+    stable = [
+        element.text
+        for element in root.iter("version")
+        if element.text and STABLE_LOOM.match(element.text)
+    ]
+    if not stable:
+        raise Failure("no stable fabric-loom version found")
+    return max(stable, key=lambda version: tuple(int(p) for p in version.split(".")))
 
 
 def latest_fabric_api(minecraft_version: str) -> str | None:
@@ -367,6 +411,7 @@ def update_gradle_properties(
     minecraft_version: str,
     loader_version: str,
     fabric_api_version: str,
+    loom_version: str,
     dry_run: bool,
     log,
 ) -> tuple[bool, list[str], str | None]:
@@ -377,6 +422,7 @@ def update_gradle_properties(
     text = set_property(text, "minecraft_version", minecraft_version)
     text = set_property(text, "loader_version", loader_version)
     text = set_property(text, "fabric_api_version", fabric_api_version)
+    text = set_property(text, "loom_version", loom_version)
     text = update_mod_version(text, minecraft_version, log)
 
     # supported_minecraft_versions is what we ANNOUNCE on Modrinth / CurseForge,
@@ -488,6 +534,12 @@ def main() -> int:
         help="continue even if the repo is already on that version",
     )
     parser.add_argument(
+        "--loom",
+        metavar="VERSION",
+        help="pin fabric-loom instead of resolving the latest stable one "
+        "(e.g. 1.13.10 for an old Minecraft version that a recent loom cannot build)",
+    )
+    parser.add_argument(
         "--run-tests",
         action="store_true",
         help="after the update, run './gradlew build' then the headless server "
@@ -579,6 +631,7 @@ def main() -> int:
         "series": series_of(target),
         "loader_version": None,
         "fabric_api_version": None,
+        "loom_version": None,
         "mod_version": None,
         "minecraft_range": None,
         "changed": False,
@@ -610,8 +663,15 @@ def main() -> int:
             "unsupported", f"No Fabric API published for Minecraft {target} yet.", 2
         )
 
+    # Loom is the build plugin, not a Minecraft dependency: Fabric publishes no
+    # "which loom builds which Minecraft" mapping, and loom is backward
+    # compatible in practice. So the latest stable is taken, and --loom is the
+    # escape hatch when an old Minecraft version needs an older loom.
+    loom = args.loom or latest_stable_loom()
+
     log(f"\n  loader_version     = {loader}")
     log(f"  fabric_api_version = {fabric_api}")
+    log(f"  loom_version       = {loom}{' (forced)' if args.loom else ''}")
 
     # Snapshot the compatibility claims before touching anything, so a failed
     # build or server test can restore them with --revert-compat.
@@ -627,7 +687,7 @@ def main() -> int:
         )
 
     changed, supported, mod_version = update_gradle_properties(
-        target, loader, fabric_api, args.dry_run, log
+        target, loader, fabric_api, loom, args.dry_run, log
     )
 
     # depends.minecraft has to be widened NOW, before the tests: otherwise Fabric
@@ -645,6 +705,7 @@ def main() -> int:
             "status": "updated",
             "loader_version": loader,
             "fabric_api_version": fabric_api,
+            "loom_version": loom,
             "mod_version": mod_version,
             "supported_minecraft_versions": supported,
             "minecraft_range": new_range,
