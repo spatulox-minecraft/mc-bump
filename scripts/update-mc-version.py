@@ -24,7 +24,8 @@ Examples
     # machine readable output (used by the GitHub workflow)
     python3 scripts/update-mc-version.py --json
 
-    # update, then build and smoke test, and only claim compatibility if both pass
+    # update, then build and boot a server for EVERY claimed version, and only
+    # claim compatibility if they all pass
     python3 scripts/update-mc-version.py --run-tests
 
     # AFTER a successful build + server test: mark the version as compatible
@@ -51,13 +52,19 @@ proven to work:
     26.1.2              26.1,26.1.1,26.1.2             ">=26.1 <=26.1.2"
     26.2                26.2            (series reset) "=26.2"
 
+Because depends.minecraft covers the WHOLE series, every version of it has to be
+built and booted, not just the newest: an update also bumps Fabric API and the
+loader, and nothing proves the older versions still run with them. That matrix
+lives in .github/scripts/test-matrix.sh and gets its list from
+--list-test-versions.
+
 depends.minecraft has to be widened BEFORE the tests run, otherwise Fabric Loader
 refuses to load the mod on the new version's server and no version could ever be
 validated. So an update raises it optimistically, and then:
 
-    build + server OK  -> --mark-supported keeps it and extends the list
-    build or server KO -> --revert-compat restores BOTH keys to their previous
-                          values, while keeping the version bumps themselves
+    whole matrix OK  -> --mark-supported keeps it and extends the list
+    any version KO   -> --revert-compat restores BOTH keys to their previous
+                        values, while keeping the version bumps themselves
 
 The values needed by --revert-compat are snapshotted in .mc-update-state.json
 (gitignored) before anything is written.
@@ -98,6 +105,7 @@ MIXINS_JSON = REPO_ROOT / "src/main/resources/extended-time-potion.mixins.json"
 UPDATE_STATE = REPO_ROOT / ".mc-update-state.json"
 
 HEADLESS_TEST = ".github/scripts/headless-server-test.sh"
+TEST_MATRIX = ".github/scripts/test-matrix.sh"
 
 
 class Failure(Exception):
@@ -269,6 +277,23 @@ def parse_version(version: str) -> tuple[int, ...] | None:
             return None
         parts.append(int(chunk))
     return tuple(parts) if parts else None
+
+
+def versions_to_test(target: str, supported: list[str]) -> list[str]:
+    """Every Minecraft version the mod will CLAIM, oldest first.
+
+    depends.minecraft covers the whole series up to the target, so testing only
+    the target proves nothing about the older versions of that series running
+    with the freshly bumped Fabric API and loader. This is the list that must
+    boot, not just its last element.
+    """
+    series = series_of(target)
+    unique = {
+        version
+        for version in [*supported, target]
+        if series_of(version) == series and parse_version(version) is not None
+    }
+    return sorted(unique, key=parse_version)
 
 
 def compat_range(target: str, supported: list[str]) -> str:
@@ -548,21 +573,20 @@ def mark_supported(dry_run: bool) -> tuple[str, list[str], str]:
 # Local build + smoke test
 # --------------------------------------------------------------------------
 def run_tests(log) -> str | None:
-    """Run the same build and smoke test as CI. Returns the failed step, or None."""
-    gradlew = "gradlew.bat" if os.name == "nt" else "./gradlew"
-    steps = [
-        ("build", [gradlew, "build", "--stacktrace"]),
-        ("headless server test", ["bash", HEADLESS_TEST]),
-    ]
-    for name, command in steps:
-        log(f"\n==> {name}: {' '.join(command)}")
-        try:
-            completed = subprocess.run(command, cwd=REPO_ROOT, check=False)
-        except OSError as exc:
-            raise Failure(f"cannot run '{command[0]}': {exc}") from exc
-        if completed.returncode != 0:
-            return name
-    return None
+    """Run the same version matrix as CI. Returns the failed step, or None.
+
+    Delegates to test-matrix.sh, which builds and boots a server for EVERY
+    claimed version rather than just the target: the bumped Fabric API and
+    loader also have to work on the older versions of the series that
+    depends.minecraft promises.
+    """
+    command = ["bash", TEST_MATRIX]
+    log(f"\n==> version matrix: {' '.join(command)}")
+    try:
+        completed = subprocess.run(command, cwd=REPO_ROOT, check=False)
+    except OSError as exc:
+        raise Failure(f"cannot run '{command[0]}': {exc}") from exc
+    return None if completed.returncode == 0 else "version matrix"
 
 
 # --------------------------------------------------------------------------
@@ -624,6 +648,12 @@ def main() -> int:
         "announced as compatible on Modrinth/CurseForge.",
     )
     parser.add_argument(
+        "--list-test-versions",
+        action="store_true",
+        help="print, one per line, every Minecraft version the mod claims and "
+        "that must therefore be booted. Used by .github/scripts/test-matrix.sh.",
+    )
+    parser.add_argument(
         "--revert-compat",
         action="store_true",
         help="restore supported_minecraft_versions and depends.minecraft to the "
@@ -649,6 +679,16 @@ def main() -> int:
     for path in (GRADLE_PROPERTIES, FABRIC_MOD_JSON, MIXINS_JSON):
         if not path.exists():
             raise Failure(f"{path} not found — run the script from the repository")
+
+    if args.list_test_versions:
+        text = GRADLE_PROPERTIES.read_text(encoding="utf-8")
+        current = read_property(text, "minecraft_version")
+        if not current:
+            raise Failure("minecraft_version missing from gradle.properties")
+        supported = split_supported(read_property(text, "supported_minecraft_versions"))
+        for version in versions_to_test(current, supported):
+            print(version)
+        return 0
 
     if args.revert_compat:
         result = revert_compat(args.dry_run)
@@ -796,7 +836,7 @@ def main() -> int:
             f"\n  /!\\ Minecraft {target} is NOT marked as compatible yet.\n"
             f"      Nothing proves the mod works at this point. Run the build and\n"
             f"      the server test, then, if they pass:\n"
-            f"        ./gradlew build && bash {HEADLESS_TEST}\n"
+            f"        bash {TEST_MATRIX}\n"
             f"        python3 scripts/update-mc-version.py --mark-supported\n"
             f"      If they fail:\n"
             f"        python3 scripts/update-mc-version.py --revert-compat"

@@ -11,6 +11,10 @@
 #   BOOT_TIMEOUT     seconds before giving up on startup   (default: 900)
 #   STOP_TIMEOUT     seconds before force killing the JVM  (default: 60)
 #   EXPECTED_POTIONS potion count expected in the log      (default: counted in the source)
+#   EXPECTED_MC      Minecraft version that must boot      (default: from gradle.properties)
+#   GRADLE_ARGS      extra gradle arguments, e.g.          (default: none)
+#                    "-Pminecraft_version=26.1"
+#   LEVEL_NAME       world name, wiped before each run     (default: ci-smoke-test)
 #
 set -euo pipefail
 
@@ -18,6 +22,8 @@ RUN_DIR="${RUN_DIR:-run}"
 LOG="${LOG:-server-test.log}"
 BOOT_TIMEOUT="${BOOT_TIMEOUT:-900}"
 STOP_TIMEOUT="${STOP_TIMEOUT:-60}"
+GRADLE_ARGS="${GRADLE_ARGS:-}"
+LEVEL_NAME="${LEVEL_NAME:-ci-smoke-test}"
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
@@ -52,12 +58,17 @@ fail() {
 mkdir -p "$RUN_DIR"
 printf 'eula=true\n' > "$RUN_DIR/eula.txt"
 
+# The world is wiped rather than reused: a save written by a newer Minecraft
+# refuses to load on an older one, which would break the version matrix the
+# moment it tests an older version after a newer one.
+rm -rf "${RUN_DIR:?}/$LEVEL_NAME"
+
 # flat world + watchdog disabled: fast startup, no false positive on a slow CI
 # runner.
-cat > "$RUN_DIR/server.properties" <<'PROPS'
+cat > "$RUN_DIR/server.properties" <<PROPS
 online-mode=false
 level-type=minecraft\:flat
-level-name=ci-smoke-test
+level-name=$LEVEL_NAME
 max-tick-time=-1
 view-distance=4
 simulation-distance=4
@@ -73,8 +84,10 @@ mkfifo "$FIFO"
 # server does not see an immediate EOF on its stdin.
 exec 3<> "$FIFO"
 
-echo "==> Starting the server (timeout ${BOOT_TIMEOUT}s)..."
-./gradlew runServer --no-daemon --console=plain --stacktrace < "$FIFO" > "$LOG" 2>&1 &
+echo "==> Starting the server (timeout ${BOOT_TIMEOUT}s)...${GRADLE_ARGS:+ [$GRADLE_ARGS]}"
+# shellcheck disable=SC2086 # GRADLE_ARGS is a deliberate list of gradle flags
+./gradlew runServer $GRADLE_ARGS --no-daemon --console=plain --stacktrace \
+    < "$FIFO" > "$LOG" 2>&1 &
 GRADLE_PID=$!
 
 # --- wait for startup -----------------------------------------------------
@@ -108,10 +121,10 @@ if ! grep -q 'extended-time-potion' "$LOG"; then
     fail "the extended-time-potion mod does not appear in the loading log"
 fi
 
-# The version actually booted must match gradle.properties. Without this guard a
-# stale loom cache or a concurrent edit of the file would turn the test green on
-# the wrong Minecraft version.
-EXPECTED_MC="$(sed -n 's/^minecraft_version=//p' gradle.properties | head -n 1 | tr -d '[:space:]')"
+# The version actually booted must match the one asked for. Without this guard a
+# stale loom cache, a concurrent edit of the file or an ignored -Pminecraft_version
+# would turn the test green on the wrong Minecraft version.
+EXPECTED_MC="${EXPECTED_MC:-$(sed -n 's/^minecraft_version=//p' gradle.properties | head -n 1 | tr -d '[:space:]')}"
 BOOTED_MC="$(sed -n 's/.*Starting minecraft server version \(.*\)$/\1/p' "$LOG" | head -n 1 | tr -d '[:space:]')"
 echo "==> Expected version: ${EXPECTED_MC:-?} | booted version: ${BOOTED_MC:-?}"
 if [ -z "$BOOTED_MC" ]; then

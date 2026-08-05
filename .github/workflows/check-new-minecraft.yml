@@ -124,27 +124,25 @@ jobs:
         if: steps.update.outputs.status == 'updated'
         uses: gradle/actions/setup-gradle@v4
 
-      - name: Build
-        id: build
+      # One step, not build-then-smoke: the matrix builds AND boots a server for
+      # each claimed version in turn. Testing only the newest would leave the
+      # older versions of the series running with the freshly bumped Fabric API
+      # completely unverified, although depends.minecraft promises them.
+      - name: Build and boot every claimed version
+        id: tests
         if: steps.update.outputs.status == 'updated'
         continue-on-error: true
         run: |
           set -o pipefail
           chmod +x gradlew
-          ./gradlew build --stacktrace 2>&1 | tee build.log
-
-      - name: Headless server test
-        id: smoke
-        if: steps.update.outputs.status == 'updated' && steps.build.outcome == 'success'
-        continue-on-error: true
-        run: bash .github/scripts/headless-server-test.sh
+          bash .github/scripts/test-matrix.sh 2>&1 | tee test-matrix.log
 
       # This is where, and nowhere else, compatibility is asserted:
       # supported_minecraft_versions drives what is announced on Modrinth and
       # CurseForge, so it is only written after proof that the mod works (build +
       # server starting + potions and brewing verified in the log).
       - name: Mark the version as compatible
-        if: steps.update.outputs.status == 'updated' && steps.build.outcome == 'success' && steps.smoke.outcome == 'success'
+        if: steps.update.outputs.status == 'updated' && steps.tests.outcome == 'success'
         env:
           MC: ${{ steps.update.outputs.minecraft_version }}
         run: |
@@ -159,7 +157,7 @@ jobs:
       # it does. Only the compatibility keys are restored, the dependency bump is
       # kept as the starting point for a manual fix.
       - name: Revert unproven compatibility
-        if: steps.update.outputs.status == 'updated' && (steps.build.outcome != 'success' || steps.smoke.outcome != 'success')
+        if: steps.update.outputs.status == 'updated' && steps.tests.outcome != 'success'
         env:
           MC: ${{ steps.update.outputs.minecraft_version }}
         run: |
@@ -175,8 +173,8 @@ jobs:
         with:
           name: server-logs-${{ steps.update.outputs.minecraft_version }}
           path: |
-            build.log
-            server-test.log
+            test-matrix.log
+            server-test-*.log
             run/logs/
           retention-days: 30
           if-no-files-found: ignore
@@ -194,8 +192,7 @@ jobs:
           JAVA: ${{ steps.update.outputs.java_version }}
           MOD_VERSION: ${{ steps.update.outputs.mod_version }}
           RANGE: ${{ steps.update.outputs.minecraft_range }}
-          BUILD: ${{ steps.build.outcome }}
-          SMOKE: ${{ steps.smoke.outcome }}
+          TESTS: ${{ steps.tests.outcome }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
@@ -204,20 +201,28 @@ jobs:
             if [ "$1" = "success" ]; then echo ":white_check_mark:"; else echo ":x:"; fi
           }
 
-          if [ "$SMOKE" = "skipped" ]; then
-            SMOKE_TXT=":heavy_minus_sign: not run (build failed)"
-          else
-            SMOKE_TXT="$(icon "$SMOKE") $SMOKE"
-          fi
+          # one row per version the matrix actually ran, read from the status file
+          # it wrote: --list-test-versions would give the wrong list here, since
+          # --revert-compat may already have shortened it.
+          MATRIX=""
+          while read -r V OUTCOME; do
+            [ -n "$V" ] || continue
+            case "$OUTCOME" in
+              ok)     ROW=":white_check_mark: builds and boots" ;;
+              server) ROW=":x: builds, but the server did not start" ;;
+              *)      ROW=":x: build failed" ;;
+            esac
+            MATRIX="$MATRIX| \`$V\` | $ROW |"$'\n'
+          done < test-matrix-status.txt
 
-          if [ "$BUILD" = "success" ] && [ "$SMOKE" = "success" ]; then
+          if [ "$TESTS" = "success" ]; then
             echo "draft=false" >> "$GITHUB_OUTPUT"
-            VERDICT=":white_check_mark: **The mod builds and the server starts on Minecraft \`$MC\`.**"
-            COMPAT="\`$RANGE\` — kept, the tests proved it."
+            VERDICT=":white_check_mark: **The mod builds and the server starts on every version Minecraft \`$MC\` brings the range to.**"
+            COMPAT="\`$RANGE\` — kept, the matrix proved it."
           else
             echo "draft=true" >> "$GITHUB_OUTPUT"
             VERDICT=":x: **The mod does not work as is on Minecraft \`$MC\`** — draft PR, the dependency diff is already done to start from."
-            COMPAT="reverted to its previous value — the tests did not prove \`$RANGE\`."
+            COMPAT="reverted to its previous value — the matrix did not prove \`$RANGE\`."
           fi
 
           cat > pr-body.md <<EOF
@@ -237,14 +242,15 @@ jobs:
           | \`mod_version\` | \`$MOD_VERSION\` |
           | \`depends.minecraft\` | $COMPAT |
 
-          ## Results
+          ## Results, one row per claimed version
 
-          | step | result |
+          Every version covered by \`depends.minecraft\` is built and booted with the
+          resolved dependencies above, not just the newest one.
+
+          | Minecraft | result |
           |---|---|
-          | \`./gradlew build\` | $(icon "$BUILD") $BUILD |
-          | headless server | $SMOKE_TXT |
-
-          The full build and server logs are available in the artifacts of the [run]($RUN_URL).
+          $MATRIX
+          The full logs of each version are available in the artifacts of the [run]($RUN_URL).
 
           ## To do by hand before merging
 
@@ -318,7 +324,7 @@ jobs:
       # Minecraft version broke the mod. The title is deterministic so re-runs
       # comment on the existing issue instead of piling up duplicates.
       - name: Open a failure issue
-        if: steps.update.outputs.status == 'updated' && (steps.build.outcome != 'success' || steps.smoke.outcome != 'success')
+        if: steps.update.outputs.status == 'updated' && steps.tests.outcome != 'success'
         env:
           GH_TOKEN: ${{ github.token }}
           MC: ${{ steps.update.outputs.minecraft_version }}
@@ -326,24 +332,19 @@ jobs:
           FABRIC_API: ${{ steps.update.outputs.fabric_api_version }}
           LOOM: ${{ steps.update.outputs.loom_version }}
           JAVA: ${{ steps.update.outputs.java_version }}
-          BUILD: ${{ steps.build.outcome }}
-          SMOKE: ${{ steps.smoke.outcome }}
+          TESTS: ${{ steps.tests.outcome }}
           PR: ${{ steps.pr.outputs.number }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
           TITLE="[auto] Minecraft $MC: the mod does not work"
 
-          if [ "$BUILD" != "success" ]; then
-            STEP="\`./gradlew build\`"
-            LOG_FILE="build.log"
-          else
-            STEP="the headless server test"
-            LOG_FILE="server-test.log"
-          fi
+          # The failing version is not necessarily the newest one: bumping Fabric
+          # API can break an OLDER version of the series that the range promises.
+          BROKEN="$(awk '$2 != "ok" { printf "%s ", $1 }' test-matrix-status.txt)"
 
           {
-            echo "The automatic update to **Minecraft \`$MC\`** failed on $STEP."
+            echo "The automatic update to **Minecraft \`$MC\`** left the mod broken on: **${BROKEN:-unknown}**"
             echo
             echo "| | version |"
             echo "|---|---|"
@@ -353,10 +354,16 @@ jobs:
             echo "| fabric-loom | \`$LOOM\` |"
             echo "| Java | \`$JAVA\` |"
             echo
-            echo "| step | result |"
+            echo "| Minecraft | result |"
             echo "|---|---|"
-            echo "| \`./gradlew build\` | $BUILD |"
-            echo "| headless server | $SMOKE |"
+            while read -r V OUTCOME; do
+              [ -n "$V" ] || continue
+              case "$OUTCOME" in
+                ok)     echo "| \`$V\` | :white_check_mark: builds and boots |" ;;
+                server) echo "| \`$V\` | :x: builds, but the server did not start |" ;;
+                *)      echo "| \`$V\` | :x: build failed |" ;;
+              esac
+            done < test-matrix-status.txt
             echo
             echo "The compatibility range was reverted on the branch: the mod does not claim to"
             echo "support \`$MC\`. The dependency bump is kept as a starting point."
@@ -367,10 +374,10 @@ jobs:
             fi
             echo "Full logs in the [run artifacts]($RUN_URL)."
             echo
-            echo "<details><summary>Last 100 lines of \`$LOG_FILE\`</summary>"
+            echo "<details><summary>Last 100 lines of the matrix</summary>"
             echo
             echo '```'
-            tail -n 100 "$LOG_FILE" 2>/dev/null || echo "(no log)"
+            tail -n 100 test-matrix.log 2>/dev/null || echo "(no log)"
             echo '```'
             echo
             echo "</details>"
