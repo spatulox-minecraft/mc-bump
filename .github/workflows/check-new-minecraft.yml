@@ -92,6 +92,7 @@ jobs:
           LOADER: ${{ steps.update.outputs.loader_version }}
           FABRIC_API: ${{ steps.update.outputs.fabric_api_version }}
           LOOM: ${{ steps.update.outputs.loom_version }}
+          JAVA: ${{ steps.update.outputs.java_version }}
           MOD_VERSION: ${{ steps.update.outputs.mod_version }}
           RANGE: ${{ steps.update.outputs.minecraft_range }}
         run: |
@@ -99,20 +100,25 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -B "${BRANCH_PREFIX}${MC}"
-          git add gradle.properties src/main/resources/fabric.mod.json
+          # mixins.json carries compatibilityLevel, which follows java_version
+          git add gradle.properties \
+                  src/main/resources/fabric.mod.json \
+                  src/main/resources/extended-time-potion.mixins.json
           # --force on an already current version resolves to the same values:
           # nothing staged, and no failure under set -e
           git diff --cached --quiet || \
             git commit -m "chore(mc): bump to Minecraft $MC" \
-                       -m "fabric-loader $LOADER, fabric-api $FABRIC_API, fabric-loom $LOOM, mod_version $MOD_VERSION, depends.minecraft $RANGE"
+                       -m "fabric-loader $LOADER, fabric-api $FABRIC_API, fabric-loom $LOOM, java $JAVA, mod_version $MOD_VERSION, depends.minecraft $RANGE"
 
       # --- Build + headless test -------------------------------------------
-      - name: Set up JDK 25
+      # After the update step, so the JDK matches the Java version the NEW
+      # Minecraft release requires, not the one the repo was on.
+      - name: Set up JDK ${{ steps.update.outputs.java_version }}
         if: steps.update.outputs.status == 'updated'
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '25'
+          java-version: ${{ steps.update.outputs.java_version }}
 
       - name: Set up Gradle
         if: steps.update.outputs.status == 'updated'
@@ -185,6 +191,7 @@ jobs:
           LOADER: ${{ steps.update.outputs.loader_version }}
           FABRIC_API: ${{ steps.update.outputs.fabric_api_version }}
           LOOM: ${{ steps.update.outputs.loom_version }}
+          JAVA: ${{ steps.update.outputs.java_version }}
           MOD_VERSION: ${{ steps.update.outputs.mod_version }}
           RANGE: ${{ steps.update.outputs.minecraft_range }}
           BUILD: ${{ steps.build.outcome }}
@@ -226,6 +233,7 @@ jobs:
           | Fabric Loader | \`$LOADER\` |
           | Fabric API | \`$FABRIC_API\` |
           | fabric-loom | \`$LOOM\` |
+          | Java | \`$JAVA\` |
           | \`mod_version\` | \`$MOD_VERSION\` |
           | \`depends.minecraft\` | $COMPAT |
 
@@ -317,6 +325,7 @@ jobs:
           LOADER: ${{ steps.update.outputs.loader_version }}
           FABRIC_API: ${{ steps.update.outputs.fabric_api_version }}
           LOOM: ${{ steps.update.outputs.loom_version }}
+          JAVA: ${{ steps.update.outputs.java_version }}
           BUILD: ${{ steps.build.outcome }}
           SMOKE: ${{ steps.smoke.outcome }}
           PR: ${{ steps.pr.outputs.number }}
@@ -342,6 +351,7 @@ jobs:
             echo "| Fabric Loader | \`$LOADER\` |"
             echo "| Fabric API | \`$FABRIC_API\` |"
             echo "| fabric-loom | \`$LOOM\` |"
+            echo "| Java | \`$JAVA\` |"
             echo
             echo "| step | result |"
             echo "|---|---|"

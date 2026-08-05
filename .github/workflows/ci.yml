@@ -19,11 +19,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up JDK 25
+      # java_version is derived from the Minecraft version by
+      # scripts/update-mc-version.py, so the JDK follows a Minecraft bump on its own.
+      - name: Read the Java version
+        id: java
+        run: echo "version=$(sed -n 's/^java_version=//p' gradle.properties | tr -d '[:space:]')" >> "$GITHUB_OUTPUT"
+
+      - name: Set up JDK ${{ steps.java.outputs.version }}
         uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '25'
+          java-version: ${{ steps.java.outputs.version }}
 
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4

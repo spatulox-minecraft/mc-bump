@@ -94,6 +94,7 @@ LOOM_METADATA = "https://maven.fabricmc.net/net/fabricmc/fabric-loom/maven-metad
 REPO_ROOT = Path(__file__).resolve().parent.parent
 GRADLE_PROPERTIES = REPO_ROOT / "gradle.properties"
 FABRIC_MOD_JSON = REPO_ROOT / "src/main/resources/fabric.mod.json"
+MIXINS_JSON = REPO_ROOT / "src/main/resources/extended-time-potion.mixins.json"
 UPDATE_STATE = REPO_ROOT / ".mc-update-state.json"
 
 HEADLESS_TEST = ".github/scripts/headless-server-test.sh"
@@ -147,12 +148,42 @@ def get_json(
 # --------------------------------------------------------------------------
 # Version resolution
 # --------------------------------------------------------------------------
+_manifest_cache: dict | None = None
+
+
+def mojang_manifest() -> dict:
+    """The Mojang version manifest, fetched at most once per run."""
+    global _manifest_cache
+    if _manifest_cache is None:
+        _manifest_cache = get_json(MOJANG_MANIFEST) or {}
+    return _manifest_cache
+
+
 def latest_minecraft_release() -> str:
-    data = get_json(MOJANG_MANIFEST)
-    version = (data or {}).get("latest", {}).get("release")
+    version = mojang_manifest().get("latest", {}).get("release")
     if not version:
         raise Failure("cannot read .latest.release from the Mojang manifest")
     return version
+
+
+def java_version_for(minecraft_version: str) -> int | None:
+    """Java major version Mojang ships this Minecraft version with.
+
+    Published as javaVersion.majorVersion in each version's own manifest, for
+    every era (1.16.5 -> 8, 1.21.11 -> 21, 26.x -> 25). Returns None when the
+    field is absent, so a missing optional field never blocks an update.
+    """
+    entry = next(
+        (
+            version
+            for version in mojang_manifest().get("versions", [])
+            if version.get("id") == minecraft_version
+        ),
+        None,
+    )
+    if not entry or not entry.get("url"):
+        return None
+    return (get_json(entry["url"]) or {}).get("javaVersion", {}).get("majorVersion")
 
 
 def loader_for(minecraft_version: str) -> str | None:
@@ -309,6 +340,42 @@ def write_depends_minecraft(value: str, dry_run: bool) -> bool:
     return True
 
 
+def write_java_version(java: int, dry_run: bool) -> bool:
+    """Propagate the Java level to fabric.mod.json and the mixin config.
+
+    gradle.properties is handled by the caller, in the same pass as the other
+    keys. build.gradle and both workflows read the value from there, so those
+    three files never need editing.
+    """
+    changed = False
+
+    original = FABRIC_MOD_JSON.read_text(encoding="utf-8")
+    data = json.loads(original)
+    if data.get("depends", {}).get("java") != f">={java}":
+        data.setdefault("depends", {})["java"] = f">={java}"
+        changed = True
+        if not dry_run:
+            write_preserving_final_newline(
+                FABRIC_MOD_JSON,
+                original,
+                json.dumps(data, indent="\t", ensure_ascii=False),
+            )
+
+    original = MIXINS_JSON.read_text(encoding="utf-8")
+    data = json.loads(original)
+    if data.get("compatibilityLevel") != f"JAVA_{java}":
+        data["compatibilityLevel"] = f"JAVA_{java}"
+        changed = True
+        if not dry_run:
+            write_preserving_final_newline(
+                MIXINS_JSON,
+                original,
+                json.dumps(data, indent="\t", ensure_ascii=False),
+            )
+
+    return changed
+
+
 def update_mod_version(text: str, target: str, log) -> str:
     """Bump the Minecraft part of mod_version, shaped as "<mc series>-<mod version>".
 
@@ -412,6 +479,7 @@ def update_gradle_properties(
     loader_version: str,
     fabric_api_version: str,
     loom_version: str,
+    java_version: int | None,
     dry_run: bool,
     log,
 ) -> tuple[bool, list[str], str | None]:
@@ -423,6 +491,8 @@ def update_gradle_properties(
     text = set_property(text, "loader_version", loader_version)
     text = set_property(text, "fabric_api_version", fabric_api_version)
     text = set_property(text, "loom_version", loom_version)
+    if java_version is not None:
+        text = set_property(text, "java_version", str(java_version))
     text = update_mod_version(text, minecraft_version, log)
 
     # supported_minecraft_versions is what we ANNOUNCE on Modrinth / CurseForge,
@@ -576,7 +646,7 @@ def main() -> int:
         if not quiet:
             print(message)
 
-    for path in (GRADLE_PROPERTIES, FABRIC_MOD_JSON):
+    for path in (GRADLE_PROPERTIES, FABRIC_MOD_JSON, MIXINS_JSON):
         if not path.exists():
             raise Failure(f"{path} not found — run the script from the repository")
 
@@ -632,6 +702,7 @@ def main() -> int:
         "loader_version": None,
         "fabric_api_version": None,
         "loom_version": None,
+        "java_version": None,
         "mod_version": None,
         "minecraft_range": None,
         "changed": False,
@@ -668,10 +739,15 @@ def main() -> int:
     # compatible in practice. So the latest stable is taken, and --loom is the
     # escape hatch when an old Minecraft version needs an older loom.
     loom = args.loom or latest_stable_loom()
+    java = java_version_for(target)
 
     log(f"\n  loader_version     = {loader}")
     log(f"  fabric_api_version = {fabric_api}")
     log(f"  loom_version       = {loom}{' (forced)' if args.loom else ''}")
+    if java is None:
+        log("  java_version       = (absent from the Mojang manifest, left as is)")
+    else:
+        log(f"  java_version       = {java}")
 
     # Snapshot the compatibility claims before touching anything, so a failed
     # build or server test can restore them with --revert-compat.
@@ -687,8 +763,9 @@ def main() -> int:
         )
 
     changed, supported, mod_version = update_gradle_properties(
-        target, loader, fabric_api, loom, args.dry_run, log
+        target, loader, fabric_api, loom, java, args.dry_run, log
     )
+    java_changed = write_java_version(java, args.dry_run) if java is not None else False
 
     # depends.minecraft has to be widened NOW, before the tests: otherwise Fabric
     # Loader refuses to load the mod on the new version and no version could ever
@@ -706,10 +783,11 @@ def main() -> int:
             "loader_version": loader,
             "fabric_api_version": fabric_api,
             "loom_version": loom,
+            "java_version": java,
             "mod_version": mod_version,
             "supported_minecraft_versions": supported,
             "minecraft_range": new_range,
-            "changed": changed or range_changed,
+            "changed": changed or range_changed or java_changed,
         }
     )
 
