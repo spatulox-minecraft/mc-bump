@@ -12,7 +12,7 @@ concurrency:
 
 jobs:
   build-and-test:
-    name: Build + serveur headless
+    name: Build + headless server
     runs-on: ubuntu-latest
     timeout-minutes: 40
 
@@ -33,7 +33,7 @@ jobs:
           chmod +x gradlew
           ./gradlew build --stacktrace
 
-      - name: Test serveur headless
+      - name: Headless server test
         run: bash .github/scripts/headless-server-test.sh
 
       - name: Upload logs
