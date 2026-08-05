@@ -262,6 +262,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           MC: ${{ steps.update.outputs.minecraft_version }}
           DRAFT: ${{ steps.body.outputs.draft }}
+          # The PR targets the ref the workflow ran from. A scheduled run always
+          # runs from the default branch, so this is master in production; a manual
+          # run from a feature branch targets that branch, which keeps the test PR
+          # down to the version bump instead of the whole branch diff.
+          BASE: ${{ github.ref_name }}
         run: |
           set -euo pipefail
           BRANCH="${BRANCH_PREFIX}${MC}"
@@ -288,7 +293,7 @@ jobs:
             DRAFT_FLAG=()
             if [ "$DRAFT" = "true" ]; then DRAFT_FLAG+=(--draft); fi
             gh pr create \
-              --base master --head "$BRANCH" \
+              --base "$BASE" --head "$BRANCH" \
               --title "$TITLE" --body-file pr-body.md \
               --label minecraft-update --assignee Spatulox \
               ${DRAFT_FLAG[@]+"${DRAFT_FLAG[@]}"}
