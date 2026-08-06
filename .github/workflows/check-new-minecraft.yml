@@ -108,7 +108,8 @@ jobs:
           # nothing staged, and no failure under set -e
           git diff --cached --quiet || \
             git commit -m "chore(mc): bump to Minecraft $MC" \
-                       -m "fabric-loader $LOADER, fabric-api $FABRIC_API, fabric-loom $LOOM, java $JAVA, mod_version $MOD_VERSION, depends.minecraft $RANGE"
+                       -m "fabric-loom $LOOM, java $JAVA, mod_version $MOD_VERSION, depends.minecraft $RANGE" \
+                       -m "fabric-loader $LOADER and fabric-api $FABRIC_API are frozen: they only move if the version matrix fails."
 
       # --- Build + headless test -------------------------------------------
       # After the update step, so the JDK matches the Java version the NEW
@@ -126,8 +127,12 @@ jobs:
 
       # One step, not build-then-smoke: the matrix builds AND boots a server for
       # each claimed version in turn. Testing only the newest would leave the
-      # older versions of the series running with the freshly bumped Fabric API
-      # completely unverified, although depends.minecraft promises them.
+      # older versions of the series completely unverified, although
+      # depends.minecraft promises them.
+      #
+      # The wrapper adds the escalation ladder: the update froze the loader and
+      # Fabric API, and this is what unfreezes them, one at a time and only if the
+      # matrix is red, re-running it in full after each bump.
       - name: Build and boot every claimed version
         id: tests
         if: steps.update.outputs.status == 'updated'
@@ -135,12 +140,48 @@ jobs:
         run: |
           set -o pipefail
           chmod +x gradlew
-          bash .github/scripts/test-matrix.sh 2>&1 | tee test-matrix.log
+          bash .github/scripts/test-with-escalation.sh 2>&1 | tee test-matrix.log
+
+      # steps.update.outputs carries the PRE-escalation versions: it ran before the
+      # ladder had a chance to bump anything. Everything downstream that reports a
+      # dependency version reads it back from gradle.properties here instead.
+      - name: Read the final dependency versions
+        id: final
+        if: steps.update.outputs.status == 'updated'
+        run: |
+          set -euo pipefail
+          prop() { sed -n "s/^$1=//p" gradle.properties | head -n 1 | tr -d '[:space:]'; }
+
+          {
+            echo "loader_version=$(prop loader_version)"
+            echo "fabric_api_version=$(prop fabric_api_version)"
+          } >> "$GITHUB_OUTPUT"
+
+          # One markdown row per escalated dependency, empty when the frozen pair
+          # was enough. Consumed by the PR body and the failure issue.
+          # touch: the ladder truncates the file on start, but it never got that
+          # far if the test step died on its very first command.
+          touch test-escalation.txt
+          ESCALATED=""
+          while read -r KEY BEFORE AFTER; do
+            [ -n "${KEY:-}" ] || continue
+            ESCALATED="$ESCALATED| \`$KEY\` | \`$BEFORE\` -> \`$AFTER\` |"$'\n'
+          done < test-escalation.txt
+
+          {
+            echo "escalated<<ESCALATION_EOF"
+            echo "$ESCALATED"
+            echo "ESCALATION_EOF"
+          } >> "$GITHUB_OUTPUT"
 
       # This is where, and nowhere else, compatibility is asserted:
       # supported_minecraft_versions drives what is announced on Modrinth and
       # CurseForge, so it is only written after proof that the mod works (build +
       # server starting + potions and brewing verified in the log).
+      #
+      # --mark-supported is also where an escalated dependency becomes a
+      # requirement of the mod (depends."fabric-api" = ">=…"), so this commit
+      # picks up both the bumped gradle key and its new floor.
       - name: Mark the version as compatible
         if: steps.update.outputs.status == 'updated' && steps.tests.outcome == 'success'
         env:
@@ -149,13 +190,20 @@ jobs:
           set -euo pipefail
           python3 scripts/update-mc-version.py --mark-supported
           git add gradle.properties src/main/resources/fabric.mod.json
+
+          BODY="$(awk '{ printf "%s %s -> %s\n", $1, $2, $3 }' test-escalation.txt)"
+          MESSAGE=(-m "chore(mc): validate Minecraft $MC (build + headless server)")
+          if [ -n "$BODY" ]; then
+            MESSAGE+=(-m "Needed an escalation of the frozen dependencies:"$'\n'"$BODY")
+          fi
+
           # the version may already be listed on a re-run: no commit, no failure
-          git diff --cached --quiet || \
-            git commit -m "chore(mc): validate Minecraft $MC (build + headless server)"
+          git diff --cached --quiet || git commit "${MESSAGE[@]}"
 
       # Mirror image: the mod does not work, so the branch must not keep claiming
-      # it does. Only the compatibility keys are restored, the dependency bump is
-      # kept as the starting point for a manual fix.
+      # it does. Only the compatibility keys are restored; the version bumps,
+      # including whatever the escalation ladder tried, are kept as the starting
+      # point for a manual fix.
       - name: Revert unproven compatibility
         if: steps.update.outputs.status == 'updated' && steps.tests.outcome != 'success'
         env:
@@ -164,8 +212,14 @@ jobs:
           set -euo pipefail
           python3 scripts/update-mc-version.py --revert-compat
           git add gradle.properties src/main/resources/fabric.mod.json
-          git diff --cached --quiet || \
-            git commit -m "chore(mc): revert unproven compatibility for $MC"
+
+          BODY="$(awk '{ printf "%s %s -> %s\n", $1, $2, $3 }' test-escalation.txt)"
+          MESSAGE=(-m "chore(mc): revert unproven compatibility for $MC")
+          if [ -n "$BODY" ]; then
+            MESSAGE+=(-m "Escalation did not help, the bumps are kept anyway:"$'\n'"$BODY")
+          fi
+
+          git diff --cached --quiet || git commit "${MESSAGE[@]}"
 
       - name: Upload logs
         if: steps.update.outputs.status == 'updated'
@@ -174,6 +228,7 @@ jobs:
           name: server-logs-${{ steps.update.outputs.minecraft_version }}
           path: |
             test-matrix.log
+            test-escalation.txt
             server-test-*.log
             run/logs/
           retention-days: 30
@@ -186,8 +241,11 @@ jobs:
         env:
           MC: ${{ steps.update.outputs.minecraft_version }}
           PREVIOUS: ${{ steps.update.outputs.previous_version }}
-          LOADER: ${{ steps.update.outputs.loader_version }}
-          FABRIC_API: ${{ steps.update.outputs.fabric_api_version }}
+          LOADER: ${{ steps.final.outputs.loader_version }}
+          FABRIC_API: ${{ steps.final.outputs.fabric_api_version }}
+          AVAILABLE_LOADER: ${{ steps.update.outputs.available_loader_version }}
+          AVAILABLE_FABRIC_API: ${{ steps.update.outputs.available_fabric_api_version }}
+          ESCALATED: ${{ steps.final.outputs.escalated }}
           LOOM: ${{ steps.update.outputs.loom_version }}
           JAVA: ${{ steps.update.outputs.java_version }}
           MOD_VERSION: ${{ steps.update.outputs.mod_version }}
@@ -200,6 +258,38 @@ jobs:
           icon() {
             if [ "$1" = "success" ]; then echo ":white_check_mark:"; else echo ":x:"; fi
           }
+
+          # "frozen" is the normal case and worth saying out loud, so nobody reads
+          # an unchanged Fabric API as the automation having forgotten it.
+          note() {  # note <in use> <latest available>
+            if [ "$1" = "$2" ]; then echo "frozen (already the latest)"
+            else echo "frozen (latest available: \`$2\`)"; fi
+          }
+          LOADER_NOTE="$(note "$LOADER" "$AVAILABLE_LOADER")"
+          FABRIC_API_NOTE="$(note "$FABRIC_API" "$AVAILABLE_FABRIC_API")"
+
+          # Written to its own file rather than to a variable: nesting a heredoc
+          # inside the one below is exactly the kind of quoting that breaks
+          # silently, and the main body can just cat it back.
+          : > escalation.md
+          if [ -n "$ESCALATED" ]; then
+            {
+              echo "## Escalation"
+              echo
+              echo "The matrix failed with the frozen dependencies, so they were bumped one at"
+              echo "a time, replaying the **whole** matrix after each bump."
+              echo
+              echo "| key | from -> to |"
+              echo "|---|---|"
+              echo "$ESCALATED"
+              # blank line, or the paragraph below gets absorbed into the table
+              echo
+              echo "A bump that fixed the matrix is recorded in \`fabric.mod.json\` as a"
+              echo "dependency floor, so a user on an older version is told to update instead"
+              echo "of crashing."
+              echo
+            } > escalation.md
+          fi
 
           # one row per version the matrix actually ran, read from the status file
           # it wrote: --list-test-versions would give the wrong list here, since
@@ -232,15 +322,17 @@ jobs:
 
           ## Resolved versions
 
-          | | version |
-          |---|---|
-          | Minecraft | \`$MC\` |
-          | Fabric Loader | \`$LOADER\` |
-          | Fabric API | \`$FABRIC_API\` |
-          | fabric-loom | \`$LOOM\` |
-          | Java | \`$JAVA\` |
-          | \`mod_version\` | \`$MOD_VERSION\` |
-          | \`depends.minecraft\` | $COMPAT |
+          | | version | |
+          |---|---|---|
+          | Minecraft | \`$MC\` | the only thing an update moves |
+          | Fabric Loader | \`$LOADER\` | $LOADER_NOTE |
+          | Fabric API | \`$FABRIC_API\` | $FABRIC_API_NOTE |
+          | fabric-loom | \`$LOOM\` | build plugin, follows the latest stable |
+          | Java | \`$JAVA\` | from the Mojang manifest |
+          | \`mod_version\` | \`$MOD_VERSION\` | |
+          | \`depends.minecraft\` | $COMPAT | |
+
+          $(cat escalation.md)
 
           ## Results, one row per claimed version
 
@@ -260,8 +352,10 @@ jobs:
 
           > \`supported_minecraft_versions\` and \`depends.minecraft\` are both derived from the
           > Minecraft series and are only extended once the build and the headless server test pass.
-          > \`loom_version\` follows the latest stable fabric-loom. If the build fails inside loom
-          > itself, re-run this workflow after pinning it with
+          > Fabric Loader and Fabric API are **frozen** by an update and only move through the
+          > escalation ladder in \`.github/scripts/test-with-escalation.sh\`, so a red matrix has one
+          > suspect instead of three. \`loom_version\` follows the latest stable fabric-loom; if the
+          > build fails inside loom itself, re-run this workflow after pinning it with
           > \`python3 scripts/update-mc-version.py <version> --loom <loom version>\`.
 
           ---
@@ -328,8 +422,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           MC: ${{ steps.update.outputs.minecraft_version }}
-          LOADER: ${{ steps.update.outputs.loader_version }}
-          FABRIC_API: ${{ steps.update.outputs.fabric_api_version }}
+          LOADER: ${{ steps.final.outputs.loader_version }}
+          FABRIC_API: ${{ steps.final.outputs.fabric_api_version }}
+          ESCALATED: ${{ steps.final.outputs.escalated }}
           LOOM: ${{ steps.update.outputs.loom_version }}
           JAVA: ${{ steps.update.outputs.java_version }}
           TESTS: ${{ steps.tests.outcome }}
@@ -354,6 +449,19 @@ jobs:
             echo "| fabric-loom | \`$LOOM\` |"
             echo "| Java | \`$JAVA\` |"
             echo
+            # The ladder already tried these, so nobody should waste time
+            # suggesting them as the fix.
+            if [ -n "$ESCALATED" ]; then
+              echo "Bumping the frozen dependencies was already attempted, without success:"
+              echo
+              echo "| key | from -> to |"
+              echo "|---|---|"
+              echo "$ESCALATED"
+            else
+              echo "Fabric Loader and Fabric API are unchanged: either they were already on the"
+              echo "newest release for this Minecraft version, or bumping them was not reached."
+              echo
+            fi
             echo "| Minecraft | result |"
             echo "|---|---|"
             while read -r V OUTCOME; do
