@@ -3,10 +3,10 @@
 Resolve the Fabric versions matching a Minecraft version and update
 gradle.properties and src/main/resources/fabric.mod.json.
 
-Four versions are resolved: Minecraft (Mojang manifest), Fabric Loader and
-Fabric API (both checked against the target Minecraft version), and fabric-loom,
-the build plugin, taken as the latest stable release from the Fabric Maven so the
-build stays reproducible. Use --loom to pin it.
+An update moves ONE variable: Minecraft. fabric-loom follows, because it is the
+build plugin rather than a runtime dependency, and the Java level follows because
+Mojang dictates it. Fabric Loader and Fabric API stay FROZEN on the values already
+in gradle.properties; see "Escalation" below for when and how they move.
 
 Standard library only: no pip install required.
 
@@ -24,8 +24,8 @@ Examples
     # machine readable output (used by the GitHub workflow)
     python3 scripts/update-mc-version.py --json
 
-    # update, then build and boot a server for EVERY claimed version, and only
-    # claim compatibility if they all pass
+    # update, then build and boot a server for EVERY claimed version, escalating
+    # the frozen dependencies if needed, and only claim compatibility if it works
     python3 scripts/update-mc-version.py --run-tests
 
     # AFTER a successful build + server test: mark the version as compatible
@@ -33,6 +33,10 @@ Examples
 
     # after a FAILED build or server test: restore the previous compatibility claims
     python3 scripts/update-mc-version.py --revert-compat
+
+    # escalation steps, driven by .github/scripts/test-with-escalation.sh
+    python3 scripts/update-mc-version.py --bump-fabric-api
+    python3 scripts/update-mc-version.py --bump-loader
 
 Compatibility model
 -------------------
@@ -53,10 +57,9 @@ proven to work:
     26.2                26.2            (series reset) "=26.2"
 
 Because depends.minecraft covers the WHOLE series, every version of it has to be
-built and booted, not just the newest: an update also bumps Fabric API and the
-loader, and nothing proves the older versions still run with them. That matrix
-lives in .github/scripts/test-matrix.sh and gets its list from
---list-test-versions.
+built and booted, not just the newest: nothing proves the older versions of the
+series still run once anything moved. That matrix lives in
+.github/scripts/test-matrix.sh and gets its list from --list-test-versions.
 
 depends.minecraft has to be widened BEFORE the tests run, otherwise Fabric Loader
 refuses to load the mod on the new version's server and no version could ever be
@@ -69,11 +72,38 @@ validated. So an update raises it optimistically, and then:
 The values needed by --revert-compat are snapshotted in .mc-update-state.json
 (gitignored) before anything is written.
 
+Escalation
+----------
+Bumping Minecraft, Fabric Loader and Fabric API at once makes a red matrix
+unreadable: three variables moved, and the loader and the API move the behaviour
+of EVERY sub-version at once, not just the one Minecraft added. So an update
+freezes the loader and the API, and they are only bumped as a reaction to a
+failure, one at a time, each followed by a full matrix re-run:
+
+    matrix with the frozen dependencies
+      KO -> --bump-fabric-api  -> whole matrix again
+              KO -> --bump-loader -> whole matrix again
+                      KO -> --revert-compat, the mod is broken
+
+That ladder lives in .github/scripts/test-with-escalation.sh. The version bumps
+themselves survive a total failure, as the starting point of a manual fix; only
+the compatibility claims are reverted.
+
+An escalation that fixes the matrix is recorded in fabric.mod.json as a dependency
+floor, so a user running an older Fabric API than the one we needed is told to
+update rather than silently crashing:
+
+    fabric_api_version = 0.156.1+26.2  ->  depends."fabric-api" = ">=0.156.1+26.2"
+
+--mark-supported writes those floors, and only for what actually moved: without an
+escalation "fabric-api" keeps its "*".
+
 Exit codes
 ----------
     0  success (updated, or already up to date)
     1  error (network, missing file, version not found, failed tests...)
     2  Fabric does not support this Minecraft version yet
+    3  --bump-*: already on the newest version, this escalation step is a no-op
 """
 
 from __future__ import annotations
@@ -104,8 +134,7 @@ FABRIC_MOD_JSON = REPO_ROOT / "src/main/resources/fabric.mod.json"
 MIXINS_JSON = REPO_ROOT / "src/main/resources/extended-time-potion.mixins.json"
 UPDATE_STATE = REPO_ROOT / ".mc-update-state.json"
 
-HEADLESS_TEST = ".github/scripts/headless-server-test.sh"
-TEST_MATRIX = ".github/scripts/test-matrix.sh"
+ESCALATION_LADDER = ".github/scripts/test-with-escalation.sh"
 
 
 class Failure(Exception):
@@ -347,18 +376,18 @@ def write_preserving_final_newline(path: Path, original: str, new: str) -> None:
     path.write_text(new, encoding="utf-8")
 
 
-def read_depends_minecraft() -> str | None:
+def read_depends(key: str) -> str | None:
     data = json.loads(FABRIC_MOD_JSON.read_text(encoding="utf-8"))
-    return data.get("depends", {}).get("minecraft")
+    return data.get("depends", {}).get(key)
 
 
-def write_depends_minecraft(value: str, dry_run: bool) -> bool:
-    """Rewrite depends.minecraft. Returns True when the file changed."""
+def write_depends(key: str, value: str, dry_run: bool) -> bool:
+    """Rewrite one entry of depends. Returns True when the file changed."""
     original = FABRIC_MOD_JSON.read_text(encoding="utf-8")
     data = json.loads(original)
-    if data.get("depends", {}).get("minecraft") == value:
+    if data.get("depends", {}).get(key) == value:
         return False
-    data.setdefault("depends", {})["minecraft"] = value
+    data.setdefault("depends", {})[key] = value
     if not dry_run:
         rendered = json.dumps(data, indent="\t", ensure_ascii=False)
         write_preserving_final_newline(FABRIC_MOD_JSON, original, rendered)
@@ -372,19 +401,7 @@ def write_java_version(java: int, dry_run: bool) -> bool:
     keys. build.gradle and both workflows read the value from there, so those
     three files never need editing.
     """
-    changed = False
-
-    original = FABRIC_MOD_JSON.read_text(encoding="utf-8")
-    data = json.loads(original)
-    if data.get("depends", {}).get("java") != f">={java}":
-        data.setdefault("depends", {})["java"] = f">={java}"
-        changed = True
-        if not dry_run:
-            write_preserving_final_newline(
-                FABRIC_MOD_JSON,
-                original,
-                json.dumps(data, indent="\t", ensure_ascii=False),
-            )
+    changed = write_depends("java", f">={java}", dry_run)
 
     original = MIXINS_JSON.read_text(encoding="utf-8")
     data = json.loads(original)
@@ -423,8 +440,13 @@ def update_mod_version(text: str, target: str, log) -> str:
 # --------------------------------------------------------------------------
 # Update state, used by --revert-compat
 # --------------------------------------------------------------------------
-def save_update_state(target: str, supported_raw: str, depends: str | None) -> None:
+def save_update_state(target: str, supported_raw: str) -> None:
     """Snapshot the compatibility claims as they were BEFORE the update.
+
+    The frozen dependency versions are snapshotted too, not to restore them, but
+    so --mark-supported can tell what an escalation moved: comparing
+    gradle.properties against this is what decides whether a dependency floor is
+    written into fabric.mod.json.
 
     An existing snapshot for the same target is kept: it holds the genuine
     pre-bump values, which a re-run (--force) would otherwise overwrite with the
@@ -437,18 +459,34 @@ def save_update_state(target: str, supported_raw: str, depends: str | None) -> N
             previous = {}
         if previous.get("target") == target:
             return
+
+    properties = GRADLE_PROPERTIES.read_text(encoding="utf-8")
     UPDATE_STATE.write_text(
         json.dumps(
             {
                 "target": target,
                 "supported_minecraft_versions": supported_raw,
-                "depends_minecraft": depends,
+                "depends_minecraft": read_depends("minecraft"),
+                "loader_version": read_property(properties, "loader_version"),
+                "fabric_api_version": read_property(properties, "fabric_api_version"),
+                "depends_fabricloader": read_depends("fabricloader"),
+                "depends_fabric_api": read_depends("fabric-api"),
             },
             indent=2,
         )
         + "\n",
         encoding="utf-8",
     )
+
+
+def load_update_state() -> dict:
+    """The snapshot, or {} when there is none / it is unreadable."""
+    if not UPDATE_STATE.exists():
+        return {}
+    try:
+        return json.loads(UPDATE_STATE.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
 
 
 def clear_update_state() -> None:
@@ -458,9 +496,10 @@ def clear_update_state() -> None:
 def revert_compat(dry_run: bool) -> dict:
     """Restore the compatibility claims recorded before the last update.
 
-    Only supported_minecraft_versions and depends.minecraft are restored. The
-    version bumps (minecraft_version, loader_version, fabric_api_version,
-    mod_version) are kept: they are the dependency diff someone picks up from.
+    Only the CLAIMS are restored: supported_minecraft_versions, depends.minecraft
+    and the two dependency floors an escalation may have written. The version
+    bumps (minecraft_version, loader_version, fabric_api_version, mod_version) are
+    kept: they are the dependency diff someone picks up from.
     """
     if not UPDATE_STATE.exists():
         raise Failure(f"no update state to revert ({UPDATE_STATE.name} not found)")
@@ -484,7 +523,18 @@ def revert_compat(dry_run: bool) -> dict:
     if text != original and not dry_run:
         write_preserving_final_newline(GRADLE_PROPERTIES, original, text)
     if depends is not None:
-        write_depends_minecraft(depends, dry_run)
+        write_depends("minecraft", depends, dry_run)
+
+    # The floors are only written by --mark-supported, so a failed run should not
+    # have any to restore. Doing it anyway makes the revert idempotent, and covers
+    # a re-run that succeeded once and now fails.
+    for key, snapshot_key in (
+        ("fabricloader", "depends_fabricloader"),
+        ("fabric-api", "depends_fabric_api"),
+    ):
+        if state.get(snapshot_key) is not None:
+            write_depends(key, state[snapshot_key], dry_run)
+
     if not dry_run:
         clear_update_state()
 
@@ -501,20 +551,23 @@ def revert_compat(dry_run: bool) -> dict:
 # --------------------------------------------------------------------------
 def update_gradle_properties(
     minecraft_version: str,
-    loader_version: str,
-    fabric_api_version: str,
     loom_version: str,
     java_version: int | None,
     dry_run: bool,
     log,
 ) -> tuple[bool, list[str], str | None]:
+    """Apply the update. loader_version and fabric_api_version are NOT touched.
+
+    Freezing them is the whole point: an update moves Minecraft, and only
+    Minecraft, so a red matrix names its culprit. They move later, one at a time,
+    through --bump-fabric-api / --bump-loader. loom is exempt because it is the
+    build plugin, not something that ships in the jar.
+    """
     original = GRADLE_PROPERTIES.read_text(encoding="utf-8")
     current = read_property(original, "minecraft_version") or ""
     text = original
 
     text = set_property(text, "minecraft_version", minecraft_version)
-    text = set_property(text, "loader_version", loader_version)
-    text = set_property(text, "fabric_api_version", fabric_api_version)
     text = set_property(text, "loom_version", loom_version)
     if java_version is not None:
         text = set_property(text, "java_version", str(java_version))
@@ -540,12 +593,49 @@ def update_gradle_properties(
     return changed, supported, read_property(text, "mod_version")
 
 
-def mark_supported(dry_run: bool) -> tuple[str, list[str], str]:
+def engrave_dependency_floors(dry_run: bool) -> dict[str, str]:
+    """Write depends floors for the dependencies an escalation had to move.
+
+    Only for what MOVED, hence the comparison against the pre-update snapshot: a
+    nominal update escalates nothing, and "fabric-api": "*" must keep its "*"
+    rather than acquire a floor nobody asked for.
+
+    The version is written raw, suffix included (">=0.156.1+26.2"). Fabric follows
+    semver, where build metadata is ignored when comparing, so the suffix is
+    cosmetic at runtime — but it makes the file say exactly which artifact was
+    tested, which is what someone reading it wants to know.
+
+    Without a snapshot (a manual, standalone --mark-supported) nothing is
+    observable as having escalated, so nothing is written.
+    """
+    state = load_update_state()
+    if not state:
+        return {}
+
+    properties = GRADLE_PROPERTIES.read_text(encoding="utf-8")
+    written: dict[str, str] = {}
+    for gradle_key, depends_key in (
+        ("fabric_api_version", "fabric-api"),
+        ("loader_version", "fabricloader"),
+    ):
+        version = read_property(properties, gradle_key)
+        if not version or version == state.get(gradle_key):
+            continue
+        floor = f">={version}"
+        write_depends(depends_key, floor, dry_run)
+        written[depends_key] = floor
+    return written
+
+
+def mark_supported(dry_run: bool) -> tuple[str, list[str], str, dict[str, str]]:
     """Add the current minecraft_version to supported_minecraft_versions.
 
     Only to be called after a successful build and server test: this list is what
     is announced as compatible on Modrinth and CurseForge. depends.minecraft is
     recomputed from the same list so the two can never drift apart.
+
+    This is also where an escalated dependency becomes a requirement of the mod:
+    proof that it was needed is exactly what running the matrix produced.
     """
     original = GRADLE_PROPERTIES.read_text(encoding="utf-8")
     current = read_property(original, "minecraft_version")
@@ -561,32 +651,87 @@ def mark_supported(dry_run: bool) -> tuple[str, list[str], str]:
         write_preserving_final_newline(GRADLE_PROPERTIES, original, text)
 
     new_range = compat_range(current, supported)
-    write_depends_minecraft(new_range, dry_run)
+    write_depends("minecraft", new_range, dry_run)
+    floors = engrave_dependency_floors(dry_run)
 
     # Compatibility is proven, there is nothing left to revert.
     if not dry_run:
         clear_update_state()
-    return current, supported, new_range
+    return current, supported, new_range, floors
+
+
+# --------------------------------------------------------------------------
+# Escalation
+# --------------------------------------------------------------------------
+EXIT_ALREADY_LATEST = 3
+
+
+def bump_dependency(gradle_key: str, resolve, label: str, dry_run: bool, log) -> dict:
+    """Move ONE frozen dependency to the newest release for the current Minecraft.
+
+    Called only after a red matrix. The target is read from gradle.properties
+    rather than taken as an argument: the escalation reacts to whatever the update
+    left behind, and a caller passing a different version would be resolving for a
+    Minecraft the matrix never ran.
+
+    fabric.mod.json is deliberately untouched. A bump is a hypothesis; the floor is
+    only engraved by --mark-supported, once the matrix has proven the hypothesis.
+
+    status is "already-latest" when there is nothing newer. That is not a failure,
+    it just means this rung of the ladder cannot change the outcome and re-running
+    the matrix would burn CI time to reproduce the same red.
+    """
+    properties = GRADLE_PROPERTIES.read_text(encoding="utf-8")
+    minecraft_version = read_property(properties, "minecraft_version")
+    if not minecraft_version:
+        raise Failure("minecraft_version missing from gradle.properties")
+
+    previous = read_property(properties, gradle_key)
+    resolved = resolve(minecraft_version)
+    if not resolved:
+        raise Failure(f"no {label} published for Minecraft {minecraft_version}")
+
+    result = {
+        "status": "already-latest",
+        "minecraft_version": minecraft_version,
+        "gradle_key": gradle_key,
+        f"previous_{gradle_key}": previous,
+        gradle_key: resolved,
+    }
+
+    if resolved == previous:
+        log(f"{label} is already on {resolved} for Minecraft {minecraft_version}.")
+        return result
+
+    text = set_property(properties, gradle_key, resolved)
+    if not dry_run:
+        write_preserving_final_newline(GRADLE_PROPERTIES, properties, text)
+
+    result["status"] = f"bumped-{label}"
+    log(f"{label}: {previous} -> {resolved} (Minecraft {minecraft_version})")
+    log("  fabric.mod.json untouched: the floor is written by --mark-supported.")
+    return result
 
 
 # --------------------------------------------------------------------------
 # Local build + smoke test
 # --------------------------------------------------------------------------
 def run_tests(log) -> str | None:
-    """Run the same version matrix as CI. Returns the failed step, or None.
+    """Run the same ladder as CI. Returns the failed step, or None.
 
-    Delegates to test-matrix.sh, which builds and boots a server for EVERY
-    claimed version rather than just the target: the bumped Fabric API and
-    loader also have to work on the older versions of the series that
-    depends.minecraft promises.
+    Delegates to test-with-escalation.sh rather than to the matrix directly, so
+    local and CI run strictly the same sequence: a full matrix over every claimed
+    version, then a Fabric API bump and another full matrix, then a loader bump
+    and a third one. Duplicating that ladder here would be a second place for it
+    to drift.
     """
-    command = ["bash", TEST_MATRIX]
-    log(f"\n==> version matrix: {' '.join(command)}")
+    command = ["bash", ESCALATION_LADDER]
+    log(f"\n==> version matrix with escalation: {' '.join(command)}")
     try:
         completed = subprocess.run(command, cwd=REPO_ROOT, check=False)
     except OSError as exc:
         raise Failure(f"cannot run '{command[0]}': {exc}") from exc
-    return None if completed.returncode == 0 else "version matrix"
+    return None if completed.returncode == 0 else "version matrix (escalation exhausted)"
 
 
 # --------------------------------------------------------------------------
@@ -660,12 +805,31 @@ def main() -> int:
         "values recorded before the last update, keeping the version bumps. Use "
         "after a failed build or server test.",
     )
+    parser.add_argument(
+        "--bump-fabric-api",
+        action="store_true",
+        help="escalation step: move the frozen fabric_api_version to the newest "
+        "release for the current minecraft_version. Exit code 3 when there is "
+        "nothing newer. fabric.mod.json is left to --mark-supported.",
+    )
+    parser.add_argument(
+        "--bump-loader",
+        action="store_true",
+        help="escalation step: same as --bump-fabric-api, for loader_version.",
+    )
     args = parser.parse_args()
 
-    modes = [args.mark_supported, args.revert_compat, args.run_tests]
+    modes = [
+        args.mark_supported,
+        args.revert_compat,
+        args.run_tests,
+        args.bump_fabric_api,
+        args.bump_loader,
+    ]
     if sum(bool(mode) for mode in modes) > 1:
         parser.error(
-            "--mark-supported, --revert-compat and --run-tests are mutually exclusive"
+            "--mark-supported, --revert-compat, --run-tests, --bump-fabric-api and "
+            "--bump-loader are mutually exclusive"
         )
     if args.run_tests and (args.dry_run or args.json):
         parser.error("--run-tests cannot be combined with --dry-run or --json")
@@ -706,11 +870,29 @@ def main() -> int:
         emit_github_output(result)
         return 0
 
+    if args.bump_fabric_api or args.bump_loader:
+        if args.bump_fabric_api:
+            result = bump_dependency(
+                "fabric_api_version", latest_fabric_api, "fabric-api", args.dry_run, log
+            )
+        else:
+            result = bump_dependency(
+                "loader_version", loader_for, "fabric-loader", args.dry_run, log
+            )
+        if args.dry_run:
+            log("\n--dry-run: no file modified.")
+        if args.json:
+            print(json.dumps(result, indent=2))
+        emit_github_output(result)
+        return EXIT_ALREADY_LATEST if result["status"] == "already-latest" else 0
+
     if args.mark_supported:
-        version, supported, new_range = mark_supported(args.dry_run)
+        version, supported, new_range, floors = mark_supported(args.dry_run)
         log(f"Minecraft {version} marked as compatible.")
         log(f"  supported_minecraft_versions = {','.join(supported)}")
         log(f"  fabric.mod.json depends.minecraft = {new_range}")
+        for key, floor in floors.items():
+            log(f"  fabric.mod.json depends.{key} = {floor}  (escalated)")
         if args.dry_run:
             log("\n--dry-run: no file modified.")
         result = {
@@ -718,6 +900,9 @@ def main() -> int:
             "minecraft_version": version,
             "supported_minecraft_versions": supported,
             "minecraft_range": new_range,
+            "dependency_floors": ",".join(
+                f"{key}{floor}" for key, floor in floors.items()
+            ),
         }
         if args.json:
             print(json.dumps(result, indent=2))
@@ -734,13 +919,23 @@ def main() -> int:
     log(f"Current version : {current}")
     log(f"Target version  : {target}")
 
+    properties = GRADLE_PROPERTIES.read_text(encoding="utf-8")
+    frozen_loader = read_property(properties, "loader_version")
+    frozen_fabric_api = read_property(properties, "fabric_api_version")
+
+    # loader_version / fabric_api_version report what the build will ACTUALLY use,
+    # which after this run is still the frozen pair. What Fabric offers goes in
+    # available_*, so the PR can say "frozen on X, latest available Y" without the
+    # two ever being confused.
     result = {
         "status": "",
         "minecraft_version": target,
         "previous_version": current,
         "series": series_of(target),
-        "loader_version": None,
-        "fabric_api_version": None,
+        "loader_version": frozen_loader,
+        "fabric_api_version": frozen_fabric_api,
+        "available_loader_version": None,
+        "available_fabric_api_version": None,
         "loom_version": None,
         "java_version": None,
         "mod_version": None,
@@ -759,6 +954,10 @@ def main() -> int:
     if target == current and not args.force:
         return stop("up-to-date", "Already up to date. (--force to reapply)", 0)
 
+    # Both resolvers stay, but as AVAILABILITY probes rather than as sources of
+    # values to write: Fabric listing neither a loader nor an API for the target is
+    # what "Fabric is not ready for this Minecraft yet" means, and there is no
+    # point updating anything in that case.
     loader = loader_for(target)
     if not loader:
         return stop(
@@ -769,7 +968,7 @@ def main() -> int:
 
     fabric_api = latest_fabric_api(target)
     if not fabric_api:
-        result["loader_version"] = loader
+        result["available_loader_version"] = loader
         return stop(
             "unsupported", f"No Fabric API published for Minecraft {target} yet.", 2
         )
@@ -781,8 +980,13 @@ def main() -> int:
     loom = args.loom or latest_stable_loom()
     java = java_version_for(target)
 
-    log(f"\n  loader_version     = {loader}")
-    log(f"  fabric_api_version = {fabric_api}")
+    def frozen(current_value: str | None, available: str) -> str:
+        if current_value == available:
+            return f"{current_value} (frozen, already the latest)"
+        return f"{current_value} (frozen, latest available: {available})"
+
+    log(f"\n  loader_version     = {frozen(frozen_loader, loader)}")
+    log(f"  fabric_api_version = {frozen(frozen_fabric_api, fabric_api)}")
     log(f"  loom_version       = {loom}{' (forced)' if args.loom else ''}")
     if java is None:
         log("  java_version       = (absent from the Mojang manifest, left as is)")
@@ -793,17 +997,11 @@ def main() -> int:
     # build or server test can restore them with --revert-compat.
     if not args.dry_run:
         save_update_state(
-            target,
-            read_property(
-                GRADLE_PROPERTIES.read_text(encoding="utf-8"),
-                "supported_minecraft_versions",
-            )
-            or "",
-            read_depends_minecraft(),
+            target, read_property(properties, "supported_minecraft_versions") or ""
         )
 
     changed, supported, mod_version = update_gradle_properties(
-        target, loader, fabric_api, loom, java, args.dry_run, log
+        target, loom, java, args.dry_run, log
     )
     java_changed = write_java_version(java, args.dry_run) if java is not None else False
 
@@ -811,7 +1009,7 @@ def main() -> int:
     # Loader refuses to load the mod on the new version and no version could ever
     # be validated. --revert-compat undoes it if the tests fail.
     new_range = compat_range(target, supported)
-    range_changed = write_depends_minecraft(new_range, args.dry_run)
+    range_changed = write_depends("minecraft", new_range, args.dry_run)
 
     log(f"  mod_version        = {mod_version}")
     log(f"  supported_minecraft_versions = {','.join(supported) or '(empty)'}")
@@ -820,8 +1018,8 @@ def main() -> int:
     result.update(
         {
             "status": "updated",
-            "loader_version": loader,
-            "fabric_api_version": fabric_api,
+            "available_loader_version": loader,
+            "available_fabric_api_version": fabric_api,
             "loom_version": loom,
             "java_version": java,
             "mod_version": mod_version,
@@ -834,11 +1032,12 @@ def main() -> int:
     if target not in supported:
         log(
             f"\n  /!\\ Minecraft {target} is NOT marked as compatible yet.\n"
-            f"      Nothing proves the mod works at this point. Run the build and\n"
-            f"      the server test, then, if they pass:\n"
-            f"        bash {TEST_MATRIX}\n"
+            f"      Nothing proves the mod works at this point. Run the matrix,\n"
+            f"      which escalates the frozen dependencies if it has to:\n"
+            f"        bash {ESCALATION_LADDER}\n"
+            f"      then, if it passes:\n"
             f"        python3 scripts/update-mc-version.py --mark-supported\n"
-            f"      If they fail:\n"
+            f"      If it fails:\n"
             f"        python3 scripts/update-mc-version.py --revert-compat"
         )
 
@@ -852,9 +1051,14 @@ def main() -> int:
     if args.run_tests:
         failed = run_tests(log)
         if failed:
+            # Same reason as the success path: read back what the escalation left
+            # in gradle.properties, since those bumps are kept.
+            properties = GRADLE_PROPERTIES.read_text(encoding="utf-8")
             reverted = revert_compat(dry_run=False)
             result["status"] = "tests-failed"
             result["failed_step"] = failed
+            result["loader_version"] = read_property(properties, "loader_version")
+            result["fabric_api_version"] = read_property(properties, "fabric_api_version")
             result["supported_minecraft_versions"] = reverted[
                 "supported_minecraft_versions"
             ]
@@ -866,8 +1070,13 @@ def main() -> int:
             )
             emit_github_output(result)
             return 1
-        version, supported, new_range = mark_supported(dry_run=False)
+        version, supported, new_range, floors = mark_supported(dry_run=False)
+        # An escalation rewrote gradle.properties behind our back, so the result
+        # has to be re-read rather than kept from before the tests.
+        properties = GRADLE_PROPERTIES.read_text(encoding="utf-8")
         result["status"] = "validated"
+        result["loader_version"] = read_property(properties, "loader_version")
+        result["fabric_api_version"] = read_property(properties, "fabric_api_version")
         result["supported_minecraft_versions"] = supported
         result["minecraft_range"] = new_range
         log(
@@ -875,6 +1084,8 @@ def main() -> int:
             f"    supported_minecraft_versions = {','.join(supported)}\n"
             f"    depends.minecraft = {new_range}"
         )
+        for key, floor in floors.items():
+            log(f"    depends.{key} = {floor}  (escalated)")
 
     if args.json:
         print(json.dumps(result, indent=2))
