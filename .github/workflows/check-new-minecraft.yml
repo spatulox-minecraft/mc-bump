@@ -504,3 +504,17 @@ jobs:
               --title "$TITLE" --body-file issue-body.md \
               --assignee Spatulox --label minecraft-update
           fi
+
+      # --- Verdict -----------------------------------------------------------
+      # The matrix runs with continue-on-error so that the revert, the pull
+      # request and the issue still happen after a failure; that is the whole
+      # point of this workflow. The side effect is that the run ends GREEN while
+      # the mod is broken, and the Actions tab then says the opposite of the
+      # truth. Last step, so everything above has already been reported.
+      - name: Fail the run when the matrix did not pass
+        if: steps.update.outputs.status == 'updated' && steps.tests.outcome != 'success'
+        env:
+          MC: ${{ steps.update.outputs.minecraft_version }}
+        run: |
+          echo "::error::the version matrix failed on Minecraft $MC, even after the escalation ladder. The compatibility claims were reverted; see the draft pull request and the issue."
+          exit 1

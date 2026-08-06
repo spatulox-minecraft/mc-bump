@@ -30,8 +30,24 @@ cd "$REPO_ROOT"
 
 # Expected potion count, derived from the source so it stays correct when potions
 # are added (rather than a constant to maintain in two places).
+#
+# "|| true" is required, not defensive: grep -c exits 1 when it counts zero, and
+# under set -e that kills the script right here, on an assignment, with no
+# message whatsoever. Counting zero is a real answer — the registrations left the
+# source, or the pattern stopped matching them — and it deserves to be said out
+# loud rather than to look like an infrastructure glitch.
 MOD_SOURCE="src/main/java/com/spatulox/ExtendedTimePotion.java"
-EXPECTED_POTIONS="${EXPECTED_POTIONS:-$(grep -c '= registerPotion(' "$MOD_SOURCE")}"
+if [ -z "${EXPECTED_POTIONS:-}" ]; then
+    EXPECTED_POTIONS="$(grep -c '= registerPotion(' "$MOD_SOURCE" || true)"
+fi
+if ! [ "${EXPECTED_POTIONS:-0}" -gt 0 ] 2>/dev/null; then
+    echo "=== FAILED: expected potion count is '${EXPECTED_POTIONS:-}' ==="
+    echo "No '= registerPotion(' line found in $MOD_SOURCE."
+    echo "Either the potions were removed, or the registration was rewritten and"
+    echo "this script no longer knows how to count it. Set EXPECTED_POTIONS to"
+    echo "override."
+    exit 1
+fi
 
 FIFO_DIR="$(mktemp -d)"
 FIFO="$FIFO_DIR/server-stdin"
