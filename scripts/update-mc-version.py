@@ -56,6 +56,17 @@ proven to work:
     26.1.2              26.1,26.1.1,26.1.2             ">=26.1 <=26.1.2"
     26.2                26.2            (series reset) "=26.2"
 
+mod_version is named after that same list, as "<mc label>-<mod version>", and the
+label never promises more than what was tested:
+
+    covered versions            mod_version           jar
+    26.2                        26.2-1.1.0            …-26.2-1.1.0.jar
+    26.1, 26.1.1, 26.1.2        26.1.x-1.1.0          …-26.1.x-1.1.0.jar
+
+The wildcard stays at the sub-version level. "26.x" would read as "26.3 works
+too", which nothing has built, booted or published. The right-hand side stays a
+manual release decision.
+
 Because depends.minecraft covers the WHOLE series, every version of it has to be
 built and booted, not just the newest: nothing proves the older versions of the
 series still run once anything moved. That matrix lives in
@@ -418,11 +429,40 @@ def write_java_version(java: int, dry_run: bool) -> bool:
     return changed
 
 
-def update_mod_version(text: str, target: str, log) -> str:
-    """Bump the Minecraft part of mod_version, shaped as "<mc series>-<mod version>".
+def mc_label(versions: list[str]) -> str:
+    """Name a SET of covered Minecraft versions, for the left part of mod_version.
+
+    A single version is named exactly; several sub-versions of one series collapse
+    to "<series>.x":
+
+        [26.2]                      -> "26.2"
+        [26.1, 26.1.1]              -> "26.1.x"
+        [26.1, 26.1.1, 26.1.2]      -> "26.1.x"
+
+    The wildcard never climbs a level. "26.x" would promise 26.3 to anyone reading
+    the file name, and nothing has ever built, booted or published that version.
+    A jar covers one series by construction (a series change resets
+    supported_minecraft_versions), so the multi-series case cannot be produced
+    here; should it ever be, the lowest series wins, which under-promises rather
+    than over-promises.
+    """
+    unique = sorted(
+        {version for version in versions if version},
+        key=lambda version: parse_version(version) or (),
+    )
+    if not unique:
+        return ""
+    if len(unique) == 1:
+        return unique[0]
+    return f"{series_of(unique[0])}.x"
+
+
+def update_mod_version(text: str, covered: list[str], log) -> str:
+    """Rewrite the Minecraft part of mod_version, shaped as "<mc label>-<mod version>".
 
     Only the left-hand side is derived from Minecraft; the right-hand side stays
-    a manual release decision.
+    a manual release decision. `covered` is the set of versions the jar claims, so
+    the file name says exactly what was tested — see mc_label().
     """
     current = read_property(text, "mod_version")
     if current is None:
@@ -430,11 +470,14 @@ def update_mod_version(text: str, target: str, log) -> str:
     if "-" not in current:
         log(
             f"  /!\\ mod_version='{current}' has no '-' separator, "
-            f"left untouched (expected '<mc series>-<mod version>')"
+            f"left untouched (expected '<mc label>-<mod version>')"
         )
         return text
+    label = mc_label(covered)
+    if not label:
+        return text
     _, mod_part = current.split("-", 1)
-    return set_property(text, "mod_version", f"{series_of(target)}-{mod_part}")
+    return set_property(text, "mod_version", f"{label}-{mod_part}")
 
 
 # --------------------------------------------------------------------------
@@ -571,7 +614,6 @@ def update_gradle_properties(
     text = set_property(text, "loom_version", loom_version)
     if java_version is not None:
         text = set_property(text, "java_version", str(java_version))
-    text = update_mod_version(text, minecraft_version, log)
 
     # supported_minecraft_versions is what we ANNOUNCE on Modrinth / CurseForge,
     # so nothing here may add to it: at this point nothing proves the mod still
@@ -586,6 +628,10 @@ def update_gradle_properties(
         )
         supported = []
         text = set_property(text, "supported_minecraft_versions", "")
+
+    # After the possible reset, so the label names the versions THIS jar will
+    # claim: the ones the matrix is about to run, not the previous series.
+    text = update_mod_version(text, versions_to_test(minecraft_version, supported), log)
 
     changed = text != original
     if changed and not dry_run:
@@ -627,12 +673,16 @@ def engrave_dependency_floors(dry_run: bool) -> dict[str, str]:
     return written
 
 
-def mark_supported(dry_run: bool) -> tuple[str, list[str], str, dict[str, str]]:
+def mark_supported(
+    dry_run: bool, log=lambda _message="": None
+) -> tuple[str, list[str], str, dict[str, str]]:
     """Add the current minecraft_version to supported_minecraft_versions.
 
     Only to be called after a successful build and server test: this list is what
-    is announced as compatible on Modrinth and CurseForge. depends.minecraft is
-    recomputed from the same list so the two can never drift apart.
+    is announced as compatible on Modrinth and CurseForge. depends.minecraft and
+    the Minecraft part of mod_version are recomputed from that same list, so the
+    announced versions, the range Fabric enforces and the jar file name can never
+    drift apart.
 
     This is also where an escalated dependency becomes a requirement of the mod:
     proof that it was needed is exactly what running the matrix produced.
@@ -647,6 +697,9 @@ def mark_supported(dry_run: bool) -> tuple[str, list[str], str, dict[str, str]]:
         supported.append(current)
 
     text = set_property(original, "supported_minecraft_versions", ",".join(supported))
+    # The proven list is the final word on the jar name: a matrix that only
+    # validated 26.1 must not ship a jar called 26.1.x.
+    text = update_mod_version(text, supported, log)
     if text != original and not dry_run:
         write_preserving_final_newline(GRADLE_PROPERTIES, original, text)
 
@@ -887,7 +940,7 @@ def main() -> int:
         return EXIT_ALREADY_LATEST if result["status"] == "already-latest" else 0
 
     if args.mark_supported:
-        version, supported, new_range, floors = mark_supported(args.dry_run)
+        version, supported, new_range, floors = mark_supported(args.dry_run, log)
         log(f"Minecraft {version} marked as compatible.")
         log(f"  supported_minecraft_versions = {','.join(supported)}")
         log(f"  fabric.mod.json depends.minecraft = {new_range}")
@@ -1070,7 +1123,7 @@ def main() -> int:
             )
             emit_github_output(result)
             return 1
-        version, supported, new_range, floors = mark_supported(dry_run=False)
+        version, supported, new_range, floors = mark_supported(dry_run=False, log=log)
         # An escalation rewrote gradle.properties behind our back, so the result
         # has to be re-read rather than kept from before the tests.
         properties = GRADLE_PROPERTIES.read_text(encoding="utf-8")
