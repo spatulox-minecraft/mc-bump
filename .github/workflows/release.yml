@@ -1,0 +1,218 @@
+name: Release
+
+# Publishes the mod to Modrinth and CurseForge once a new version lands on master,
+# then tags the commit.
+#
+# The trigger is mod_version, not "supported_minecraft_versions grew": the tag
+# carries mod_version, so it is the only field that guarantees a unique name, and
+# it covers manual mod releases (1.1.0 -> 1.2.0 with no Minecraft change) too.
+#
+# The tag means "this version is RELEASED", and is therefore pushed AFTER a
+# successful upload. That ordering is what makes a failure recoverable: no tag is
+# left behind, so re-running the workflow simply tries again. Tagging first would
+# leave a tag that makes every re-run skip the publication.
+#
+# Accepted limitation: a patch bump (26.1.1 -> 26.1.2) does not change the series,
+# hence no new tag. supported_minecraft_versions and depends.minecraft keep the
+# record of it.
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - gradle.properties
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+# cancel-in-progress stays false: an upload must never be cut in flight.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  # Decides whether to publish, and refuses early. Nothing here writes anything:
+  # the expensive job below only starts once both guards are cleared.
+  check:
+    name: Should we publish?
+    runs-on: ubuntu-latest
+    outputs:
+      publish: ${{ steps.check.outputs.publish }}
+      tag: ${{ steps.check.outputs.tag }}
+      java: ${{ steps.check.outputs.java }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # the existing tags are needed to know whether this version is already out
+          fetch-depth: 0
+
+      - name: Check the version and the compatibility claims
+        id: check
+        run: |
+          set -euo pipefail
+
+          prop() { sed -n "s/^$1=//p" gradle.properties | head -n 1 | tr -d '[:space:]'; }
+
+          MOD_VERSION="$(prop mod_version)"
+          if [ -z "$MOD_VERSION" ]; then
+            echo "::error::mod_version missing from gradle.properties"
+            exit 1
+          fi
+          TAG="v$MOD_VERSION"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+          # Idempotent: "the tag does not exist yet" is the whole condition, and it
+          # is safe to replay. No need to diff against the previous commit.
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+            echo "### \`$TAG\` is already released, nothing to do." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          # Merging a DRAFT pull request (the matrix failed) leaves minecraft_version
+          # bumped while --revert-compat restored the previous, shorter
+          # supported_minecraft_versions. Publishing then would ship a jar built
+          # against the new version while announcing the old one. build.gradle's
+          # requireSupportedVersions only catches the empty list.
+          MC="$(prop minecraft_version)"
+          SUPPORTED="$(prop supported_minecraft_versions)"
+          case ",$SUPPORTED," in
+            *",$MC,"*) ;;
+            *)
+              echo "::error::minecraft_version=$MC is not in supported_minecraft_versions=$SUPPORTED: compatibility was never proven, refusing to publish"
+              exit 1
+              ;;
+          esac
+
+          echo "publish=true" >> "$GITHUB_OUTPUT"
+          echo "java=$(prop java_version)" >> "$GITHUB_OUTPUT"
+
+          {
+            echo "### Releasing \`$TAG\` :rocket:"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Minecraft | \`$MC\` |"
+            echo "| announced | \`$SUPPORTED\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  publish:
+    name: Test and publish
+    needs: check
+    if: needs.check.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    # the matrix builds and boots a server per claimed version, and retries once
+    # on a loom setup hang
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # java_version is derived from the Minecraft version by
+      # scripts/update-mc-version.py, so the JDK follows a Minecraft bump on its own.
+      - name: Set up JDK ${{ needs.check.outputs.java }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ needs.check.outputs.java }}
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # The matrix, not the single smoke test: it proves every version listed in
+      # supported_minecraft_versions, which is exactly what gameVersions announces
+      # to players. Proving only the newest would publish claims about the rest.
+      - name: Build and boot every claimed version
+        run: |
+          set -o pipefail
+          chmod +x gradlew
+          bash .github/scripts/test-matrix.sh 2>&1 | tee test-matrix.log
+
+      - name: Publish to Modrinth and CurseForge
+        env:
+          MODRINTH_TOKEN: ${{ secrets.MODRINTH_TOKEN }}
+          CURSEFORGE_TOKEN: ${{ secrets.CURSEFORGE_TOKEN }}
+        run: ./gradlew publishMod --stacktrace
+
+      # Cosmetic, and it runs AFTER the upload: continue-on-error so a failure
+      # here cannot fail the job, which would skip the tag job on an already
+      # published version and make any re-run hit a duplicate version number.
+      - name: Recap
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          prop() { sed -n "s/^$1=//p" gradle.properties | head -n 1 | tr -d '[:space:]'; }
+          {
+            echo "### Published \`$(prop mod_version)\` :package:"
+            echo
+            echo "Game versions announced: \`$(prop supported_minecraft_versions)\`"
+            echo
+            echo '```'
+            ./gradlew --quiet printChangelog
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-logs-${{ needs.check.outputs.tag }}
+          path: |
+            test-matrix.log
+            server-test-*.log
+            run/logs/
+          retention-days: 30
+          if-no-files-found: ignore
+
+  # Only reached once the upload succeeded: the tag is the record of a release,
+  # not of a merge.
+  tag:
+    name: Tag the released version
+    needs: [check, publish]
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create the tag
+        env:
+          TAG: ${{ needs.check.outputs.tag }}
+        run: |
+          set -euo pipefail
+
+          prop() { sed -n "s/^$1=//p" gradle.properties | head -n 1 | tr -d '[:space:]'; }
+
+          MC="$(prop minecraft_version)"
+          SUPPORTED="$(prop supported_minecraft_versions)"
+          LOADER="$(prop loader_version)"
+          FABRIC_API="$(prop fabric_api_version)"
+          LOOM="$(prop loom_version)"
+          JAVA="$(prop java_version)"
+          RANGE="$(python3 -c "import json;print(json.load(open('src/main/resources/fabric.mod.json'))['depends']['minecraft'])")"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "Minecraft $MC" \
+            -m "supported_minecraft_versions: $SUPPORTED
+          depends.minecraft: $RANGE
+          fabric-loader: $LOADER
+          fabric-api: $FABRIC_API
+          fabric-loom: $LOOM
+          java: $JAVA"
+          git push origin "$TAG"
+
+          {
+            echo "### Tag \`$TAG\` created :label:"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Minecraft | \`$MC\` |"
+            echo "| supported | \`$SUPPORTED\` |"
+            echo "| \`depends.minecraft\` | \`$RANGE\` |"
+            echo "| Fabric Loader | \`$LOADER\` |"
+            echo "| Fabric API | \`$FABRIC_API\` |"
+            echo "| fabric-loom | \`$LOOM\` |"
+            echo "| Java | \`$JAVA\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
