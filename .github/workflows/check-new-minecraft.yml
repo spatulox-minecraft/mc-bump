@@ -37,7 +37,7 @@ jobs:
     timeout-minutes: 60
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # All the version resolution and file editing lives in
       # scripts/update-mc-version.py, so that CI and local use share exactly the
@@ -116,14 +116,14 @@ jobs:
       # Minecraft release requires, not the one the repo was on.
       - name: Set up JDK ${{ steps.update.outputs.java_version }}
         if: steps.update.outputs.status == 'updated'
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: ${{ steps.update.outputs.java_version }}
 
       - name: Set up Gradle
         if: steps.update.outputs.status == 'updated'
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v5
 
       # One step, not build-then-smoke: the matrix builds AND boots a server for
       # each claimed version in turn. Testing only the newest would leave the
@@ -223,7 +223,7 @@ jobs:
 
       - name: Upload logs
         if: steps.update.outputs.status == 'updated'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: server-logs-${{ steps.update.outputs.minecraft_version }}
           path: |

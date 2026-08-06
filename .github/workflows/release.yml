@@ -43,7 +43,7 @@ jobs:
       java: ${{ steps.check.outputs.java }}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # the existing tags are needed to know whether this version is already out
           fetch-depth: 0
@@ -108,18 +108,18 @@ jobs:
     timeout-minutes: 90
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # java_version is derived from the Minecraft version by
       # scripts/update-mc-version.py, so the JDK follows a Minecraft bump on its own.
       - name: Set up JDK ${{ needs.check.outputs.java }}
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: ${{ needs.check.outputs.java }}
 
       - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v5
 
       # The matrix, not the single smoke test: it proves every version listed in
       # supported_minecraft_versions, which is exactly what gameVersions announces
@@ -156,7 +156,7 @@ jobs:
 
       - name: Upload logs
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: release-logs-${{ needs.check.outputs.tag }}
           path: |
@@ -174,7 +174,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Create the tag
         env:
