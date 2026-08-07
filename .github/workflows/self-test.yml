@@ -62,8 +62,12 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq shellcheck
+      # No --severity filter: the scripts are clean at every level, and the day
+      # they are not is the day to decide, not to discover.
+      # -x -P: follow `source lib.sh`, so the shared file is checked in context
+      # rather than reported as unreadable.
       - name: Lint the scripts
-        run: shellcheck --severity=warning scripts/*.sh
+        run: shellcheck -x -P scripts scripts/*.sh
 
   actions:
     name: actionlint
