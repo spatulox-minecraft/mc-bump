@@ -38,19 +38,28 @@ ICON_KO = ":x:"
 
 @dataclass(frozen=True)
 class Block:
-    """One failed job, as it appears in the issue."""
+    """One test, passed or failed, as it appears in the report."""
 
     title: str
-    log: str
+    log: str = ""
     kind: str = "other"
+    failed: bool = True
+    #: qualifier shown next to the icon, e.g. "non blocking"
+    note: str = ""
 
     @property
     def rank(self) -> int:
-        return SEVERITY.get(self.kind, len(SEVERITY))
+        # Failures first, then by severity: a reader scanning the table should
+        # meet what broke before what worked.
+        return (0 if self.failed else 1, SEVERITY.get(self.kind, len(SEVERITY)))
 
 
 def collect(directory: Path) -> list[Block]:
-    """Read every failure-report-* artifact under `directory`, most severe first.
+    """Read every report written under `directory`, failures first.
+
+    Passing tests are kept: they are the rows of the summary table that say what
+    DID work, which is half of what makes a failure readable. Only the failures
+    get a collapsible log.
 
     A malformed report is kept rather than dropped: losing the evidence of a
     failure is worse than rendering it under a generic title.
@@ -67,8 +76,6 @@ def collect(directory: Path) -> list[Block]:
             meta = json.loads(meta_file.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             meta = {}
-        if not meta.get("failed", True):
-            continue
 
         log_file = report / "log.txt"
         try:
@@ -81,10 +88,16 @@ def collect(directory: Path) -> list[Block]:
                 title=meta.get("title") or report.name,
                 log=log,
                 kind=meta.get("kind") or "other",
+                failed=bool(meta.get("failed", True)),
+                note=meta.get("note") or "",
             )
         )
 
     return sorted(blocks, key=lambda block: (block.rank, block.title))
+
+
+def failed_only(blocks: list[Block]) -> list[Block]:
+    return [block for block in blocks if block.failed]
 
 
 def tail(text: str, lines: int) -> str:
@@ -108,6 +121,99 @@ def details(block: Block, log_tail: int) -> str:
     )
 
 
+def test_report(blocks: list[Block], log_tail: int = 100, heading: str = "## Test results") -> str:
+    """The one thing pasted into BOTH the pull request and the issue.
+
+    A table saying at a glance what passed and what did not, then one collapsible
+    block per failure holding its log. Rendered from the same data in both places,
+    so a reader never has to correlate two differently shaped reports — which is
+    what the previous split did: a per-version table in the pull request, and
+    logs with no table in the issue.
+    """
+    if not blocks:
+        return ""
+
+    rows = ["| test | result |", "|---|---|"]
+    for block in blocks:
+        icon = ICON_KO if block.failed else ICON_OK
+        note = f" — {block.note}" if block.note else ""
+        rows.append(f"| {block.title} | {icon}{note} |")
+
+    parts = [heading, "\n".join(rows)]
+    parts.extend(details(block, log_tail) for block in failed_only(blocks))
+    return "\n\n".join(parts)
+
+
+def blocks_from_matrix_status(
+    status_text: str,
+    root: Path | None = None,
+    fallback_log: str = "test-matrix.log",
+    fallback_title: str = "Version matrix",
+) -> list[Block]:
+    """Turn the matrix status file into report blocks, logs included.
+
+    The sequential matrix (the escalation ladder) runs inside ONE job, so it
+    produces no per-version artifact the way the GitHub job matrix does. Its
+    status file plus the per-version logs it leaves behind carry the same
+    information, and this is what makes the two paths render identically.
+
+    An EMPTY status file is not "nothing happened": the matrix truncates it on
+    start, so an empty one means it died before finishing its first version. The
+    fallback turns that into one block holding the run log, rather than a report
+    that silently shows no test at all.
+    """
+    blocks: list[Block] = []
+    for line in status_text.splitlines():
+        parts = line.split()
+        if not parts:
+            continue
+        version = parts[0]
+        outcome = parts[1] if len(parts) > 1 else "build"
+
+        if outcome == "ok":
+            blocks.append(
+                Block(
+                    title=f"Build + server — Minecraft {version}",
+                    kind="server",
+                    failed=False,
+                    note="builds and boots",
+                )
+            )
+            continue
+
+        if outcome == "server":
+            title = f"Headless server — Minecraft {version}"
+            kind = "server"
+            note = "builds, but the server did not start"
+            log_name = f"server-test-{version}.log"
+        else:
+            title = f"Build — Minecraft {version}"
+            kind = "build"
+            note = "build failed"
+            log_name = f"build-{version}.log"
+
+        log = ""
+        if root is not None:
+            candidate = root / log_name
+            if candidate.is_file():
+                log = candidate.read_text(encoding="utf-8", errors="replace")
+        blocks.append(Block(title=title, log=log or "(no log)", kind=kind, note=note))
+
+    if not blocks and root is not None:
+        candidate = root / fallback_log
+        if candidate.is_file():
+            blocks.append(
+                Block(
+                    title=fallback_title,
+                    log=candidate.read_text(encoding="utf-8", errors="replace"),
+                    kind="build",
+                    note="never reached a single version",
+                )
+            )
+
+    return sorted(blocks, key=lambda block: (block.rank, block.title))
+
+
 def failure_issue_title(workflow: str, ref: str) -> str:
     """Deterministic, so a re-run comments instead of opening a duplicate.
 
@@ -128,12 +234,13 @@ def failure_issue_body(
     intro: str = "",
     extra: str = "",
 ) -> str:
-    if not blocks:
+    failures = failed_only(blocks)
+    if not failures:
         raise Failure("no failed job to report")
 
     parts = [intro.strip()] if intro.strip() else []
-    names = ", ".join(f"**{block.title}**" for block in blocks)
-    parts.append(f"{len(blocks)} job(s) failed on `{ref}`: {names}")
+    names = ", ".join(f"**{block.title}**" for block in failures)
+    parts.append(f"{len(failures)} test(s) failed on `{ref}`: {names}")
 
     if branch:
         parts.append(
@@ -144,36 +251,15 @@ def failure_issue_body(
     if extra.strip():
         parts.append(extra.strip())
 
+    # The same table + collapsible logs the pull request shows, from the same data.
+    parts.append(test_report(blocks, log_tail))
     parts.append(f"Full logs in the [run artifacts]({run_url}).")
-    parts.extend(details(block, log_tail) for block in blocks)
     return "\n\n".join(parts) + "\n"
 
 
 # --------------------------------------------------------------------------
 # The update pull request
 # --------------------------------------------------------------------------
-def matrix_table(status_lines: str) -> str:
-    """One row per version the matrix actually ran, from its status file.
-
-    Read from what the matrix WROTE rather than recomputed: by reporting time
-    --revert-compat may already have shortened the list of supported versions.
-    """
-    rows = ["| Minecraft | result |", "|---|---|"]
-    for line in status_lines.splitlines():
-        parts = line.split()
-        if not parts:
-            continue
-        version, outcome = parts[0], (parts[1] if len(parts) > 1 else "build")
-        if outcome == "ok":
-            verdict = f"{ICON_OK} builds and boots"
-        elif outcome == "server":
-            verdict = f"{ICON_KO} builds, but the server did not start"
-        else:
-            verdict = f"{ICON_KO} build failed"
-        rows.append(f"| `{version}` | {verdict} |")
-    return "\n".join(rows)
-
-
 def escalation_table(escalation_lines: str) -> str:
     """"<gradle key> <from> <to>" per line, as the ladder writes it."""
     rows = []
@@ -218,10 +304,11 @@ def pr_body(
     mod_version: str,
     compat_range: str,
     tests_passed: bool,
-    matrix_status: str,
+    blocks: list,
     escalation: str,
     run_url: str,
     workflow_file: str,
+    log_tail: int = 100,
 ) -> str:
     def frozen_note(in_use: str, available: str) -> str:
         # "frozen" is the normal case and worth saying out loud, so nobody reads
@@ -263,13 +350,13 @@ def pr_body(
     if escalated:
         sections.append(escalated)
 
+    # Every version covered by the compatibility range is built and booted with
+    # the resolved dependencies above, not just the newest one — and the unit
+    # tests and the gametest sit in the same table, so the pull request shows
+    # everything that ran rather than the matrix alone.
     sections.append(
-        "## Results, one row per claimed version\n\n"
-        "Every version covered by the compatibility range is built and booted "
-        "with the resolved dependencies above, not just the newest one.\n\n"
-        f"{matrix_table(matrix_status)}\n\n"
-        f"The full logs of each version are available in the artifacts of the "
-        f"[run]({run_url})."
+        test_report(blocks, log_tail, heading="## Test results")
+        + f"\n\nThe full logs are available in the artifacts of the [run]({run_url})."
     )
 
     sections.append(
@@ -312,6 +399,12 @@ def main(argv: list[str] | None = None) -> int:
         "without any shell quoting.",
     )
     parser.add_argument("--reports-dir", default="reports")
+    parser.add_argument(
+        "--matrix-status",
+        help="status file of the SEQUENTIAL matrix, folded into the same table as "
+        "the other tests. The GitHub job matrix reports through --reports-dir "
+        "instead, one artifact per version.",
+    )
     parser.add_argument("--workflow", default=os.environ.get("GITHUB_WORKFLOW", "CI"))
     parser.add_argument("--ref", default=os.environ.get("GITHUB_REF_NAME", "?"))
     parser.add_argument("--run-url", default="")
@@ -324,21 +417,29 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    def all_blocks() -> list[Block]:
+        """Every test that ran, whichever shape the pipeline reported it in."""
+        blocks = collect(Path(args.reports_dir))
+        if args.matrix_status and Path(args.matrix_status).is_file():
+            blocks += blocks_from_matrix_status(
+                Path(args.matrix_status).read_text(encoding="utf-8"), Path.cwd()
+            )
+        return sorted(blocks, key=lambda block: (block.rank, block.title))
+
     if args.pr_body:
         try:
             data = json.loads(Path(args.pr_body).read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             raise Failure(f"cannot read {args.pr_body}: {exc}") from exc
         try:
-            rendered = pr_body(**data)
+            rendered = pr_body(blocks=all_blocks(), log_tail=args.log_tail, **data)
         except TypeError as exc:
             raise Failure(f"{args.pr_body} does not describe a pull request: {exc}") from exc
     elif args.failure_title:
         rendered = failure_issue_title(args.workflow, args.ref)
     elif args.failure_issue:
-        blocks = collect(Path(args.reports_dir))
         rendered = failure_issue_body(
-            blocks,
+            all_blocks(),
             workflow=args.workflow,
             ref=args.ref,
             run_url=args.run_url,

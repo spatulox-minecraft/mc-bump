@@ -271,6 +271,7 @@ jobs:
           title: Client gametest
           kind: gametest
           outcome: ${{ steps.gametest.outcome }}
+          note: ${{ needs.config.outputs.gametest_blocking == 'true' && ' ' || 'non blocking' }}
           log: gametest.log
           retention-days: ${{ needs.config.outputs.retention_days }}
 

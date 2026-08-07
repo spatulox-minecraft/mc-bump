@@ -28,6 +28,16 @@ inputs:
   extra:
     description: Extra section before the collapsible blocks
     default: ""
+  matrix-status:
+    description: >
+      Status file of the sequential matrix, folded into the same table as the
+      other tests. Empty when the pipeline used the GitHub job matrix instead.
+    default: ""
+  download:
+    description: >
+      Download the failure-report-* artifacts. False when the reports were
+      written by THIS job and are already in mc-bump-reports/.
+    default: "true"
   token:
     description: Token with issues:write
     required: true
@@ -36,6 +46,7 @@ runs:
   using: composite
   steps:
     - name: Download every failure report
+      if: inputs.download == 'true'
       uses: actions/download-artifact@v7
       with:
         pattern: failure-report-*
@@ -51,6 +62,7 @@ runs:
         BRANCH: ${{ inputs.branch }}
         INTRO: ${{ inputs.intro }}
         EXTRA: ${{ inputs.extra }}
+        MATRIX_STATUS: ${{ inputs.matrix-status }}
         RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       run: |
         set -euo pipefail
@@ -70,6 +82,7 @@ runs:
               --branch "$BRANCH" \
               --intro "$INTRO" \
               --extra "$EXTRA" \
+              ${MATRIX_STATUS:+--matrix-status "$MATRIX_STATUS"} \
               --out issue-body.md; then
           # The only way this fails is "no failed job to report", which means the
           # caller's `if:` and the artifacts disagree. Say so instead of dying.

@@ -18,12 +18,21 @@ inputs:
   outcome:
     description: The job step's outcome, usually ${{ steps.<id>.outcome }}
     required: true
+  note:
+    description: Qualifier shown next to the icon in the table, e.g. "non blocking"
+    default: ""
   log:
     description: Path to the log file to attach
     required: true
   retention-days:
     description: How long to keep the artifact
     default: "7"
+  upload:
+    description: >
+      Upload the report as an artifact. Only needed when the reporting job is a
+      DIFFERENT job; a single-job pipeline (auto-update) reads mc-bump-reports/
+      straight from the workspace.
+    default: "true"
 
 runs:
   using: composite
@@ -31,14 +40,19 @@ runs:
     - name: Assemble the report
       shell: bash
       env:
+        REPORT_NAME: ${{ inputs.name }}
         REPORT_TITLE: ${{ inputs.title }}
         REPORT_KIND: ${{ inputs.kind }}
         REPORT_OUTCOME: ${{ inputs.outcome }}
+        REPORT_NOTE: ${{ inputs.note }}
         REPORT_LOG: ${{ inputs.log }}
       run: |
         set -euo pipefail
-        rm -rf mc-bump-report
-        mkdir -p mc-bump-report
+        # Accumulating directory, one subdirectory per test: several calls in the
+        # same job build the whole report without overwriting each other.
+        TARGET="mc-bump-reports/$REPORT_NAME"
+        rm -rf "$TARGET"
+        mkdir -p "$TARGET"
 
         # jq rather than a heredoc: a title carrying a quote would otherwise
         # produce JSON the reporting job silently reads as malformed.
@@ -47,20 +61,22 @@ runs:
         jq -n \
           --arg title "$REPORT_TITLE" \
           --arg kind "$REPORT_KIND" \
+          --arg note "$REPORT_NOTE" \
           --argjson failed "$FAILED" \
-          '{title: $title, kind: $kind, failed: $failed}' \
-          > mc-bump-report/meta.json
+          '{title: $title, kind: $kind, note: $note, failed: $failed}' \
+          > "$TARGET/meta.json"
 
         if [ -f "$REPORT_LOG" ]; then
-          cp "$REPORT_LOG" mc-bump-report/log.txt
+          cp "$REPORT_LOG" "$TARGET/log.txt"
         else
-          echo "(no log file at $REPORT_LOG)" > mc-bump-report/log.txt
+          echo "(no log file at $REPORT_LOG)" > "$TARGET/log.txt"
         fi
 
     - name: Upload
+      if: inputs.upload == 'true'
       uses: actions/upload-artifact@v7
       with:
         name: failure-report-${{ inputs.name }}
-        path: mc-bump-report/
+        path: mc-bump-reports/${{ inputs.name }}/
         retention-days: ${{ inputs.retention-days }}
         if-no-files-found: error

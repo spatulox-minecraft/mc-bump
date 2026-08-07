@@ -11,11 +11,13 @@ from lib import report
 from lib.common import Failure
 
 
-def write_report(directory: Path, name: str, *, title: str, kind: str, log: str, failed=True):
+def write_report(directory: Path, name: str, *, title: str, kind: str, log: str = "",
+                 failed=True, note=""):
     folder = directory / f"failure-report-{name}"
     folder.mkdir(parents=True)
     (folder / "meta.json").write_text(
-        json.dumps({"title": title, "kind": kind, "failed": failed}), encoding="utf-8"
+        json.dumps({"title": title, "kind": kind, "failed": failed, "note": note}),
+        encoding="utf-8",
     )
     (folder / "log.txt").write_text(log, encoding="utf-8")
 
@@ -26,13 +28,22 @@ class CollectTest(unittest.TestCase):
         self.dir = Path(self._tmp.name)
         self.addCleanup(self._tmp.cleanup)
 
-    def test_only_failed_jobs_are_reported(self):
+    def test_passing_tests_are_kept_as_table_rows(self):
+        """They say what DID work, which is half of what makes a failure readable."""
         write_report(self.dir, "unit", title="Unit tests", kind="unit", log="boom")
         write_report(
             self.dir, "gametest", title="Gametest", kind="gametest", log="ok", failed=False
         )
         blocks = report.collect(self.dir)
-        self.assertEqual([b.title for b in blocks], ["Unit tests"])
+        self.assertEqual([b.title for b in blocks], ["Unit tests", "Gametest"])
+        self.assertEqual([b.title for b in report.failed_only(blocks)], ["Unit tests"])
+
+    def test_failures_sort_before_passes(self):
+        write_report(self.dir, "a", title="Build ok", kind="build", log="", failed=False)
+        write_report(self.dir, "b", title="Gametest ko", kind="gametest", log="x")
+        self.assertEqual(
+            [b.title for b in report.collect(self.dir)], ["Gametest ko", "Build ok"]
+        )
 
     def test_blocks_come_out_most_severe_first(self):
         write_report(self.dir, "gametest", title="Gametest", kind="gametest", log="x")
@@ -138,15 +149,70 @@ class IssueBodyTest(unittest.TestCase):
         )
 
 
-class MatrixTableTest(unittest.TestCase):
-    def test_each_outcome_gets_its_own_wording(self):
-        table = report.matrix_table("26.1 ok\n26.1.1 server\n26.1.2 build\n")
-        self.assertIn("| `26.1` | :white_check_mark: builds and boots |", table)
-        self.assertIn("did not start", table)
-        self.assertIn("build failed", table)
+class TestReportTest(unittest.TestCase):
+    """The table + collapsible logs pasted into BOTH the pull request and the issue."""
+
+    BLOCKS = [
+        report.Block(title="Headless server — 26.1.1", log="boom", kind="server"),
+        report.Block(
+            title="Client gametest", log="assertion failed", kind="gametest",
+            note="non blocking",
+        ),
+        report.Block(title="Unit tests", kind="unit", failed=False),
+    ]
+
+    def test_every_test_gets_a_row_passed_or_failed(self):
+        rendered = report.test_report(self.BLOCKS)
+        self.assertIn("| Headless server — 26.1.1 | :x: |", rendered)
+        self.assertIn("| Unit tests | :white_check_mark: |", rendered)
+
+    def test_the_note_qualifies_the_icon(self):
+        self.assertIn("| Client gametest | :x: — non blocking |", report.test_report(self.BLOCKS))
+
+    def test_only_failures_get_a_collapsible_log(self):
+        rendered = report.test_report(self.BLOCKS)
+        self.assertEqual(rendered.count("<details>"), 2)
+        self.assertIn("<summary>Headless server — 26.1.1</summary>", rendered)
+        self.assertIn("<summary>Client gametest</summary>", rendered)
+        self.assertNotIn("<summary>Unit tests</summary>", rendered)
+
+    def test_the_table_comes_before_the_logs(self):
+        rendered = report.test_report(self.BLOCKS)
+        self.assertLess(rendered.index("| test | result |"), rendered.index("<details>"))
+
+    def test_nothing_to_report_renders_nothing(self):
+        self.assertEqual(report.test_report([]), "")
+
+
+class MatrixStatusTest(unittest.TestCase):
+    """The sequential matrix reports through its status file, not through artifacts."""
+
+    def test_each_outcome_becomes_a_block(self):
+        blocks = report.blocks_from_matrix_status("26.1 ok\n26.1.1 server\n26.1.2 build\n")
+        by_title = {b.title: b for b in blocks}
+        self.assertFalse(by_title["Build + server — Minecraft 26.1"].failed)
+        self.assertTrue(by_title["Headless server — Minecraft 26.1.1"].failed)
+        self.assertTrue(by_title["Build — Minecraft 26.1.2"].failed)
+
+    def test_it_renders_the_same_way_as_the_job_matrix(self):
+        rendered = report.test_report(
+            report.blocks_from_matrix_status("26.1 ok\n26.1.1 server\n")
+        )
+        self.assertIn("| Build + server — Minecraft 26.1 | :white_check_mark: — builds and boots |", rendered)
+        self.assertIn("did not start", rendered)
 
     def test_blank_lines_are_ignored(self):
-        self.assertEqual(len(report.matrix_table("\n\n").splitlines()), 2)  # header only
+        self.assertEqual(report.blocks_from_matrix_status("\n\n"), [])
+
+    def test_an_empty_status_file_falls_back_to_the_run_log(self):
+        """Empty means the matrix died before its first version, not that nothing ran."""
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "test-matrix.log").write_text("gradlew: not found", encoding="utf-8")
+            blocks = report.blocks_from_matrix_status("", root)
+            self.assertEqual(len(blocks), 1)
+            self.assertTrue(blocks[0].failed)
+            self.assertIn("not found", blocks[0].log)
 
 
 class EscalationTest(unittest.TestCase):

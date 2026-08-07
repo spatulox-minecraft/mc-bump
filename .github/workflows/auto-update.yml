@@ -149,17 +149,89 @@ jobs:
       - uses: gradle/actions/setup-gradle@v5
         if: steps.update.outputs.status == 'updated'
 
+      # First, and before the matrix: pure JVM logic runs in seconds, and a
+      # broken unit test explains a broken matrix. Reported in the same table
+      # either way, so the pull request shows everything that ran.
+      - name: Unit tests
+        id: unit
+        if: steps.update.outputs.status == 'updated' && steps.setup.outputs.unit_tests == 'true'
+        continue-on-error: true
+        env:
+          TASK: ${{ steps.setup.outputs.unit_task }}
+        run: |
+          set -o pipefail
+          chmod +x gradlew
+          ./gradlew "$TASK" --stacktrace --console=plain 2>&1 | tee unit-tests.log
+
+      # upload: false — this is a single job, so the reporting steps below read
+      # mc-bump-reports/ straight from the workspace instead of downloading it.
+      - if: steps.unit.outcome != ''
+        uses: ./.mc-bump/.github/actions/report
+        with:
+          name: unit
+          title: Unit tests (JUnit)
+          kind: unit
+          outcome: ${{ steps.unit.outcome }}
+          log: unit-tests.log
+          upload: "false"
+
       # The wrapper adds the escalation ladder to the matrix: the update froze the
       # loader and its API, and this is what unfreezes them, one at a time and
       # only if the matrix is red, re-running it in full after each bump.
       - name: Build and boot every claimed version
-        id: tests
+        id: matrix
         if: steps.update.outputs.status == 'updated'
         continue-on-error: true
         run: |
           set -o pipefail
           chmod +x gradlew
           python3 .mc-bump/scripts/test-with-escalation.py 2>&1 | tee test-matrix.log
+
+      # A real client under xvfb. Declared non blocking by most mods, which is
+      # why it never fails the run here — but it lands in the pull request table
+      # and in the issue all the same. An unrun test rots silently.
+      - name: Client gametest
+        id: gametest
+        if: steps.update.outputs.status == 'updated' && steps.setup.outputs.gametest == 'true'
+        continue-on-error: true
+        env:
+          TASK: ${{ steps.setup.outputs.client_gametest_task }}
+        run: |
+          set -o pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq xvfb
+          xvfb-run -a ./gradlew "$TASK" --stacktrace --console=plain 2>&1 | tee gametest.log
+
+      - if: steps.gametest.outcome != ''
+        uses: ./.mc-bump/.github/actions/report
+        with:
+          name: gametest
+          title: Client gametest
+          kind: gametest
+          outcome: ${{ steps.gametest.outcome }}
+          note: ${{ steps.setup.outputs.gametest_blocking == 'true' && ' ' || 'non blocking' }}
+          log: gametest.log
+          upload: "false"
+
+      # What decides whether compatibility can be claimed, and whether a crash
+      # issue is opened. The gametest is deliberately absent: it reports, it does
+      # not veto.
+      - name: Blocking verdict
+        id: tests
+        if: steps.update.outputs.status == 'updated'
+        run: |
+          set -euo pipefail
+          BROKEN=""
+          [ "${{ steps.matrix.outcome }}" = "success" ] || BROKEN="$BROKEN matrix"
+          if [ "${{ steps.unit.outcome }}" != "" ] && [ "${{ steps.unit.outcome }}" != "success" ]; then
+            BROKEN="$BROKEN unit-tests"
+          fi
+          if [ -n "$BROKEN" ]; then
+            echo "::warning::blocking tests failed:$BROKEN"
+            echo "outcome=failure" >> "$GITHUB_OUTPUT"
+          else
+            echo "outcome=success" >> "$GITHUB_OUTPUT"
+          fi
 
       # steps.update.outputs carries the PRE-escalation versions: it ran before
       # the ladder had a chance to bump anything. Everything downstream that
@@ -189,7 +261,7 @@ jobs:
       # supported_minecraft_versions drives what the stores announce, so it is
       # only written after proof (build + server + the mod's own assertions).
       - name: Mark the version as compatible
-        if: steps.update.outputs.status == 'updated' && steps.tests.outcome == 'success'
+        if: steps.update.outputs.status == 'updated' && steps.tests.outputs.outcome == 'success'
         env:
           MC: ${{ steps.update.outputs.minecraft_version }}
         run: |
@@ -208,7 +280,7 @@ jobs:
       # it does. Only the compatibility claims are restored; the version bumps,
       # including whatever the ladder tried, are kept for a manual fix.
       - name: Revert unproven compatibility
-        if: steps.update.outputs.status == 'updated' && steps.tests.outcome != 'success'
+        if: steps.update.outputs.status == 'updated' && steps.tests.outputs.outcome != 'success'
         env:
           MC: ${{ steps.update.outputs.minecraft_version }}
         run: |
@@ -237,17 +309,9 @@ jobs:
           retention-days: ${{ steps.setup.outputs.retention_days }}
           if-no-files-found: ignore
 
-      # The matrix here is one step, not one job per version, so it produces one
-      # report — with the per-version detail in the pull request table below.
-      - if: steps.update.outputs.status == 'updated' && steps.tests.outcome != 'success'
-        uses: ./.mc-bump/.github/actions/report
-        with:
-          name: matrix
-          title: Version matrix — Minecraft ${{ steps.update.outputs.minecraft_version }}
-          kind: server
-          outcome: ${{ steps.tests.outcome }}
-          log: test-matrix.log
-          retention-days: ${{ steps.setup.outputs.retention_days }}
+      # No report step for the matrix: it runs sequentially here, so its rows come
+      # from --matrix-status below — one per Minecraft version, with that
+      # version's own log — rather than one lump for the whole thing.
 
       # --- Pull request ----------------------------------------------------
       - name: Write the PR body
@@ -268,7 +332,8 @@ jobs:
           JAVA: ${{ steps.update.outputs.java_version }}
           MOD_VERSION: ${{ steps.update.outputs.mod_version }}
           RANGE: ${{ steps.update.outputs.minecraft_range }}
-          TESTS: ${{ steps.tests.outcome }}
+          TESTS: ${{ steps.tests.outputs.outcome }}
+          LOG_TAIL: ${{ steps.setup.outputs.log_tail }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
@@ -300,13 +365,20 @@ jobs:
             --arg mod_version "$MOD_VERSION" \
             --arg compat_range "$RANGE" \
             --argjson tests_passed "$PASSED" \
-            --arg matrix_status "$(cat test-matrix-status.txt)" \
             --arg escalation "$(cat test-escalation.txt)" \
             --arg run_url "$RUN_URL" \
             --arg workflow_file "mc-bump/.github/workflows/auto-update.yml" \
             '$ARGS.named' > pr-data.json
 
-          PYTHONPATH=.mc-bump python3 -m lib.report --pr-body pr-data.json --out pr-body.md
+          # --reports-dir + --matrix-status: the unit tests and the gametest
+          # reported into mc-bump-reports/, the matrix into its status file, and
+          # both end up as rows of the SAME table, each failure carrying its log
+          # in a collapsible block.
+          PYTHONPATH=.mc-bump python3 -m lib.report --pr-body pr-data.json \
+            --reports-dir mc-bump-reports \
+            --matrix-status test-matrix-status.txt \
+            --log-tail "$LOG_TAIL" \
+            --out pr-body.md
 
       # A PR opened with the default GITHUB_TOKEN does NOT trigger pull_request
       # workflows, so the mod's ci.yml will not run on it. Harmless: this workflow
@@ -368,8 +440,16 @@ jobs:
 
       # The draft PR alone notifies nobody. This is what says a new Minecraft
       # version broke the mod, with the matrix log in a collapsible block.
+      # Only for a BLOCKING failure — the version matrix or the unit tests. A
+      # gametest that fails on its own already appears in the pull request table
+      # above, with its log in a collapsible block; opening a crash issue for a
+      # test the mod itself declared non blocking would be crying wolf.
+      #
+      # download: false — the reports were written by this very job, they are
+      # already in mc-bump-reports/. matrix-status gives the issue the same
+      # per-version rows the pull request shows.
       - name: Report the failure
-        if: steps.update.outputs.status == 'updated' && steps.tests.outcome != 'success'
+        if: steps.update.outputs.status == 'updated' && steps.tests.outputs.outcome != 'success'
         uses: ./.mc-bump/.github/actions/report-issue
         with:
           assignee: ${{ steps.setup.outputs.assignee }}
@@ -377,6 +457,8 @@ jobs:
           log-tail: ${{ steps.setup.outputs.log_tail }}
           branch: ${{ steps.setup.outputs.branch_prefix }}${{ steps.update.outputs.minecraft_version }}
           token: ${{ github.token }}
+          download: "false"
+          matrix-status: test-matrix-status.txt
           intro: >-
             The automatic update to Minecraft
             `${{ steps.update.outputs.minecraft_version }}` left the mod broken.
@@ -391,7 +473,7 @@ jobs:
       # point of this workflow. The side effect is that the run would end GREEN
       # while the mod is broken. Last step, so everything above already reported.
       - name: Fail the run when the matrix did not pass
-        if: steps.update.outputs.status == 'updated' && steps.tests.outcome != 'success'
+        if: steps.update.outputs.status == 'updated' && steps.tests.outputs.outcome != 'success'
         env:
           MC: ${{ steps.update.outputs.minecraft_version }}
         run: |
