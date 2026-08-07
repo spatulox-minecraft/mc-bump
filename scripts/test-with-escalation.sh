@@ -1,28 +1,30 @@
 #!/usr/bin/env bash
 #
 # Runs the version matrix, and escalates the frozen dependencies when it fails.
-# Usable locally:
+# Usable locally, from the mod repository:
 #
-#   bash .github/scripts/test-with-escalation.sh
+#   bash /path/to/mc-bump/scripts/test-with-escalation.sh
 #
-# Why an escalation ladder. A Minecraft update used to bump Fabric Loader and
-# Fabric API at the same time, so a red matrix had three suspects and the loader
-# and the API each change the behaviour of EVERY sub-version at once. Those two
-# are now frozen by scripts/update-mc-version.py, and only move here, as a
-# reaction to a failure, one at a time:
+# Why an escalation ladder. A Minecraft update used to bump the loader and its API
+# at the same time, so a red matrix had three suspects — and the loader and the
+# API each change the behaviour of EVERY sub-version at once. Those two are now
+# frozen by the updater, and only move here, as a reaction to a failure, one at a
+# time:
 #
 #   matrix with the frozen dependencies
-#     KO -> bump fabric-api    -> whole matrix again
+#     KO -> bump the API      -> whole matrix again
 #             KO -> bump loader -> whole matrix again
 #                     KO -> exit 1, the mod is really broken
 #
 # Each rung re-runs the WHOLE matrix, not just the version that failed: a newer
-# Fabric API is exactly the kind of change that fixes the newest version while
-# breaking an older one of the same series, and depends.minecraft promises them
-# all.
+# API is exactly the kind of change that fixes the newest version while breaking
+# an older one of the same series, and the compatibility range promises them all.
 #
-# fabric.mod.json is not touched here. A bump is a hypothesis; the dependency
+# The mod metadata is not touched here. A bump is a hypothesis; the dependency
 # floor is only engraved by --mark-supported, once the matrix has proven it.
+#
+# The rungs come from the loader module, so a loader with a different set of
+# frozen dependencies needs no change here.
 #
 # Environment variables:
 #   ESCALATION_FILE  report of the bumps applied  (default: test-escalation.txt)
@@ -31,10 +33,12 @@
 #
 set -uo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-cd "$REPO_ROOT"
+# shellcheck source=lib.sh
+source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
+mcbump_load_config
 
-UPDATER="scripts/update-mc-version.py"
+HERE="$MCBUMP_HOME/scripts"
+UPDATER="$HERE/mc-bump.py"
 
 # What was escalated, one "<gradle key> <from> <to>" per line. The PR body reads
 # this to say why the dependency diff is bigger than a Minecraft bump. Truncated
@@ -50,7 +54,7 @@ EXIT_ALREADY_LATEST=3
 run_matrix() {
     echo ""
     echo "#################### Matrix: $1 ####################"
-    bash .github/scripts/test-matrix.sh
+    bash "$HERE/test-matrix.sh"
 }
 
 prop() {
@@ -66,15 +70,26 @@ fi
 echo ""
 echo "==> The matrix failed with the frozen dependencies, escalating."
 
-# Ordered from the least to the most invasive: Fabric API is a normal library the
-# mod calls into, the loader is the thing that runs every mod on the server.
-for STEP in "fabric_api_version --bump-fabric-api" "loader_version --bump-loader"; do
-    read -r KEY FLAG <<< "$STEP"
+# Ordered from the least to the most invasive by the loader module: the API is a
+# normal library the mod calls into, the loader is the thing that runs every mod
+# on the server.
+RUNGS="$(mcbump_python -c '
+import sys
+from lib.config import load
+for rung in load().loader.escalation_rungs():
+    print(rung.gradle_key, rung.flag, rung.label)
+')" || {
+    echo "=== FAILED: cannot read the escalation ladder from the loader ==="
+    exit 1
+}
+
+while read -r KEY FLAG LABEL; do
+    [ -n "${KEY:-}" ] || continue
     BEFORE="$(prop "$KEY")"
 
     echo ""
-    echo "==> Escalation: $FLAG (currently $KEY=$BEFORE)"
-    python3 "$UPDATER" "$FLAG"
+    echo "==> Escalation: $FLAG ($LABEL, currently $KEY=$BEFORE)"
+    mcbump_python "$UPDATER" "$FLAG"
     rc=$?
 
     if [ "$rc" -eq "$EXIT_ALREADY_LATEST" ]; then
@@ -96,7 +111,7 @@ for STEP in "fabric_api_version --bump-fabric-api" "loader_version --bump-loader
     fi
 
     echo "==> Still failing with $KEY=$AFTER."
-done
+done <<< "$RUNGS"
 
 echo ""
 echo "=== FAILED: the matrix is still red after every escalation step ==="
