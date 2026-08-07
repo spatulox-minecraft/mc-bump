@@ -19,6 +19,17 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
+      # First, and before the JDK: these are pure functions over the standard
+      # library, they need nothing but python3 and they run in a hundredth of a
+      # second. A regression in the compatibility logic therefore fails in
+      # seconds rather than at the end of a build.
+      #
+      # They also exist to be RUN. An unrun test rots silently, as src/gametest
+      # demonstrates: it stopped compiling at the 26.2 update and no workflow
+      # noticed.
+      - name: Unit tests
+        run: python3 -m unittest discover -s scripts --verbose
+
       # java_version is derived from the Minecraft version by
       # scripts/update-mc-version.py, so the JDK follows a Minecraft bump on its own.
       - name: Read the Java version
