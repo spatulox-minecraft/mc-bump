@@ -1,0 +1,51 @@
+name: mc-bump
+description: >
+  Runs one mc-bump script against the mod repository checked out in the
+  workspace. For the full pipelines use the reusable workflows in
+  .github/workflows/; this is the escape hatch for a pipeline of your own.
+
+inputs:
+  command:
+    description: >
+      Script to run, relative to mc-bump/scripts:
+      headless-server-test.sh, test-matrix.sh, test-with-escalation.sh,
+      or mc-bump.py.
+    required: true
+  args:
+    description: Arguments passed to the command.
+    default: ""
+  working-directory:
+    description: The mod repository. Defaults to the workspace root.
+    default: "."
+
+runs:
+  using: composite
+  steps:
+    - name: Install PyYAML
+      shell: bash
+      run: python3 -m pip install --quiet --disable-pip-version-check pyyaml
+
+    - name: Run ${{ inputs.command }}
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        MCBUMP_ACTION_PATH: ${{ github.action_path }}
+        COMMAND: ${{ inputs.command }}
+        ARGS: ${{ inputs.args }}
+      run: |
+        set -euo pipefail
+
+        TARGET="$MCBUMP_ACTION_PATH/scripts/$COMMAND"
+        if [ ! -f "$TARGET" ]; then
+          echo "::error::unknown mc-bump command '$COMMAND'"
+          ls "$MCBUMP_ACTION_PATH/scripts"
+          exit 1
+        fi
+
+        # ARGS is a deliberate list of flags, so word splitting is the point.
+        case "$COMMAND" in
+          *.py) # shellcheck disable=SC2086
+                python3 "$TARGET" $ARGS ;;
+          *)    # shellcheck disable=SC2086
+                bash "$TARGET" $ARGS ;;
+        esac

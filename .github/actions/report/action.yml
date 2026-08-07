@@ -1,0 +1,66 @@
+name: mc-bump failure report
+description: >
+  Uploads one job's outcome and log as a failure-report-* artifact. The reporting
+  job downloads them all and turns each failed one into a collapsible block of
+  the issue. Always call this with `if: always()`: a job that passed uploads
+  "failed": false, which is how the report tells "green" apart from "never ran".
+
+inputs:
+  name:
+    description: Artifact suffix, unique per job (e.g. "server-26.1.1")
+    required: true
+  title:
+    description: What the <summary> of the collapsible block will say
+    required: true
+  kind:
+    description: build | server | unit | gametest — drives the severity ordering
+    required: true
+  outcome:
+    description: The job step's outcome, usually ${{ steps.<id>.outcome }}
+    required: true
+  log:
+    description: Path to the log file to attach
+    required: true
+  retention-days:
+    description: How long to keep the artifact
+    default: "7"
+
+runs:
+  using: composite
+  steps:
+    - name: Assemble the report
+      shell: bash
+      env:
+        REPORT_TITLE: ${{ inputs.title }}
+        REPORT_KIND: ${{ inputs.kind }}
+        REPORT_OUTCOME: ${{ inputs.outcome }}
+        REPORT_LOG: ${{ inputs.log }}
+      run: |
+        set -euo pipefail
+        rm -rf mc-bump-report
+        mkdir -p mc-bump-report
+
+        # jq rather than a heredoc: a title carrying a quote would otherwise
+        # produce JSON the reporting job silently reads as malformed.
+        FAILED=true
+        [ "$REPORT_OUTCOME" = "success" ] && FAILED=false
+        jq -n \
+          --arg title "$REPORT_TITLE" \
+          --arg kind "$REPORT_KIND" \
+          --argjson failed "$FAILED" \
+          '{title: $title, kind: $kind, failed: $failed}' \
+          > mc-bump-report/meta.json
+
+        if [ -f "$REPORT_LOG" ]; then
+          cp "$REPORT_LOG" mc-bump-report/log.txt
+        else
+          echo "(no log file at $REPORT_LOG)" > mc-bump-report/log.txt
+        fi
+
+    - name: Upload
+      uses: actions/upload-artifact@v7
+      with:
+        name: failure-report-${{ inputs.name }}
+        path: mc-bump-report/
+        retention-days: ${{ inputs.retention-days }}
+        if-no-files-found: error

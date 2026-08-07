@@ -1,0 +1,104 @@
+name: mc-bump failure issue
+description: >
+  Collects every failure-report-* artifact of the run and opens (or comments on)
+  one issue holding a collapsible block per failed job. Expects mc-bump checked
+  out at .mc-bump.
+
+  A composite action rather than a reusable workflow on purpose: a nested
+  `uses:` cannot take an expression for its ref, so a reusable workflow would
+  have to hardcode the mc-bump version it calls itself at, and testing from a
+  branch would silently run the released code.
+
+inputs:
+  assignee:
+    description: Who the issue is assigned to
+    default: ""
+  label:
+    description: Label put on the issue, created if missing
+    default: ci-failure
+  log-tail:
+    description: Log lines kept per collapsible block
+    default: "100"
+  branch:
+    description: Branch to mention as kept, if any
+    default: ""
+  intro:
+    description: Extra paragraph at the top
+    default: ""
+  extra:
+    description: Extra section before the collapsible blocks
+    default: ""
+  token:
+    description: Token with issues:write
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: Download every failure report
+      uses: actions/download-artifact@v7
+      with:
+        pattern: failure-report-*
+        path: mc-bump-reports
+
+    - name: Open or update the issue
+      shell: bash
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        ASSIGNEE: ${{ inputs.assignee }}
+        LABEL: ${{ inputs.label }}
+        LOG_TAIL: ${{ inputs.log-tail }}
+        BRANCH: ${{ inputs.branch }}
+        INTRO: ${{ inputs.intro }}
+        EXTRA: ${{ inputs.extra }}
+        RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      run: |
+        set -euo pipefail
+
+        TITLE="$(PYTHONPATH=.mc-bump python3 -m lib.report --failure-title \
+          --workflow "$GITHUB_WORKFLOW" --ref "$GITHUB_REF_NAME")"
+
+        # --out rather than stdout: the body is markdown full of backticks and
+        # quotes, and passing it through a shell variable is exactly how those
+        # get mangled.
+        if ! PYTHONPATH=.mc-bump python3 -m lib.report --failure-issue \
+              --reports-dir mc-bump-reports \
+              --workflow "$GITHUB_WORKFLOW" \
+              --ref "$GITHUB_REF_NAME" \
+              --run-url "$RUN_URL" \
+              --log-tail "$LOG_TAIL" \
+              --branch "$BRANCH" \
+              --intro "$INTRO" \
+              --extra "$EXTRA" \
+              --out issue-body.md; then
+          # The only way this fails is "no failed job to report", which means the
+          # caller's `if:` and the artifacts disagree. Say so instead of dying.
+          echo "::warning::no failed job found in the reports, no issue opened"
+          exit 0
+        fi
+
+        echo "### $TITLE" >> "$GITHUB_STEP_SUMMARY"
+        cat issue-body.md >> "$GITHUB_STEP_SUMMARY"
+
+        # gh pr/issue create fails when the label does not exist yet
+        gh label create "$LABEL" \
+          --color d73a4a \
+          --description "Opened automatically by mc-bump when a test fails" \
+          --force
+
+        ASSIGN=()
+        if [ -n "$ASSIGNEE" ]; then ASSIGN+=(--assignee "$ASSIGNEE"); fi
+
+        # Exact title match rather than --search: the title contains brackets,
+        # which the GitHub search syntax tokenises oddly and matches fuzzily.
+        EXISTING="$(gh issue list --state open --label "$LABEL" --limit 100 \
+          --json number,title -q ".[] | select(.title == \"$TITLE\") | .number" \
+          | head -n 1 || true)"
+
+        if [ -n "$EXISTING" ]; then
+          gh issue comment "$EXISTING" --body-file issue-body.md
+          echo "Commented on existing issue #$EXISTING"
+        else
+          gh issue create --title "$TITLE" --body-file issue-body.md \
+            --label "$LABEL" ${ASSIGN[@]+"${ASSIGN[@]}"}
+        fi

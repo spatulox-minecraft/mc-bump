@@ -1,0 +1,399 @@
+name: mc-bump auto-update
+
+# Detects a new Minecraft release, resolves the dependencies, proves the mod on
+# EVERY version the new range claims, and opens a pull request.
+#
+# The compatibility range has to be widened BEFORE the tests, otherwise the
+# loader refuses to load the mod on the new version's server and no version could
+# ever be validated. So the bump is committed optimistically and reverted below
+# if the matrix fails — the version bumps themselves are always kept, as the
+# starting point of a manual fix.
+#
+# Unlike ci.yml and release.yml, the matrix here stays SEQUENTIAL: the escalation
+# ladder replays the whole matrix after each dependency bump, which is sequential
+# by construction.
+
+on:
+  workflow_call:
+    inputs:
+      mc-bump-ref:
+        type: string
+        default: v1
+        required: false
+      minecraft-version:
+        description: Force a specific Minecraft version. Empty = latest release.
+        type: string
+        default: ""
+        required: false
+      force:
+        description: Continue even if the repo is already on that version.
+        type: boolean
+        default: false
+        required: false
+
+# issues: write is needed both to open the failure issue and to create its label
+# (gh pr create --label fails when the label is missing).
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: mc-bump-update
+  cancel-in-progress: false
+
+jobs:
+  update-and-test:
+    name: Detect, update and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          repository: spatulox-minecraft/mc-bump
+          ref: ${{ inputs.mc-bump-ref }}
+          path: .mc-bump
+
+      - id: setup
+        uses: ./.mc-bump/.github/actions/setup
+
+      - name: Is the pipeline enabled?
+        if: steps.setup.outputs.auto_update != 'true'
+        run: |
+          echo "### workflows.auto-update is false, nothing to do." >> "$GITHUB_STEP_SUMMARY"
+
+      # All the version resolution and file editing lives in mc-bump.py, so CI and
+      # local use share exactly the same code. The script fills in $GITHUB_OUTPUT
+      # by itself.
+      - name: Resolve and apply versions
+        id: update
+        if: steps.setup.outputs.auto_update == 'true'
+        env:
+          INPUT_MC: ${{ inputs.minecraft-version }}
+          INPUT_FORCE: ${{ inputs.force }}
+        run: |
+          set -euo pipefail
+
+          ARGS=()
+          if [ -n "${INPUT_MC:-}" ]; then ARGS+=("$INPUT_MC"); fi
+          if [ "${INPUT_FORCE:-false}" = "true" ]; then ARGS+=(--force); fi
+
+          rc=0
+          python3 .mc-bump/scripts/mc-bump.py ${ARGS[@]+"${ARGS[@]}"} || rc=$?
+
+          # 0 = ok / already up to date, 2 = the loader is not ready yet (normal
+          # exit), 1 = real error (network, missing key...)
+          if [ "$rc" -eq 1 ]; then
+            echo "::error::version resolution failed"
+            exit 1
+          fi
+
+      - name: Summary
+        if: steps.update.outcome == 'success' && steps.update.outputs.status != 'updated'
+        env:
+          STATUS: ${{ steps.update.outputs.status }}
+          MC: ${{ steps.update.outputs.minecraft_version }}
+          LOADER: ${{ steps.setup.outputs.loader }}
+        run: |
+          if [ "$STATUS" = "up-to-date" ]; then
+            echo "### Already up to date on Minecraft \`$MC\` :white_check_mark:" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "### $LOADER does not support Minecraft \`$MC\` yet :hourglass:" >> "$GITHUB_STEP_SUMMARY"
+            echo "We will retry on the next scheduled run." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Applied diff
+        if: steps.update.outputs.status == 'updated'
+        run: git --no-pager diff
+
+      # First commit: the dependency bump and the widened compatibility range,
+      # reverted below if the tests fail.
+      - name: Commit the bump
+        if: steps.update.outputs.status == 'updated'
+        env:
+          MC: ${{ steps.update.outputs.minecraft_version }}
+          BRANCH_PREFIX: ${{ steps.setup.outputs.branch_prefix }}
+          MOD_VERSION: ${{ steps.update.outputs.mod_version }}
+          RANGE: ${{ steps.update.outputs.minecraft_range }}
+          JAVA: ${{ steps.update.outputs.java_version }}
+          BUILDTOOL: ${{ steps.update.outputs.buildtool_version }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "${BRANCH_PREFIX}${MC}"
+
+          # -u rather than a list of paths: which files carry the version is the
+          # loader's business, not the workflow's, and the updater only ever
+          # rewrites tracked files. .mc-bump is untracked, so -u leaves it alone.
+          git add -u
+
+          # --force on an already current version resolves to the same values:
+          # nothing staged, and no failure under set -e
+          git diff --cached --quiet || \
+            git commit -m "chore(mc): bump to Minecraft $MC" \
+                       -m "build plugin $BUILDTOOL, java $JAVA, mod_version $MOD_VERSION, range $RANGE" \
+                       -m "The loader and its API are frozen: they only move if the version matrix fails."
+
+      # After the update step, so the JDK matches the Java version the NEW
+      # Minecraft release requires, not the one the repo was on.
+      - name: Set up JDK ${{ steps.update.outputs.java_version }}
+        if: steps.update.outputs.status == 'updated'
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: ${{ steps.update.outputs.java_version }}
+
+      - uses: gradle/actions/setup-gradle@v5
+        if: steps.update.outputs.status == 'updated'
+
+      # The wrapper adds the escalation ladder to the matrix: the update froze the
+      # loader and its API, and this is what unfreezes them, one at a time and
+      # only if the matrix is red, re-running it in full after each bump.
+      - name: Build and boot every claimed version
+        id: tests
+        if: steps.update.outputs.status == 'updated'
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          chmod +x gradlew
+          bash .mc-bump/scripts/test-with-escalation.sh 2>&1 | tee test-matrix.log
+
+      # steps.update.outputs carries the PRE-escalation versions: it ran before
+      # the ladder had a chance to bump anything. Everything downstream that
+      # reports a dependency version reads it back from gradle.properties here.
+      - name: Read the final dependency versions
+        id: final
+        if: steps.update.outputs.status == 'updated'
+        run: |
+          set -euo pipefail
+          PYTHONPATH=.mc-bump python3 -c "
+          import os
+          from lib.config import load
+          from lib.gradle import read_property
+          project = load()
+          text = project.paths.gradle_properties.read_text(encoding='utf-8')
+          keys = project.loader.gradle_keys
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as out:
+              for role in ('loader', 'api', 'buildtool'):
+                  out.write(f'{role}_version={read_property(text, keys[role]) or \"\"}\n')
+                  out.write(f'{role}_key={keys[role]}\n')
+          "
+          # touch: the ladder truncates these on start, but it never got that far
+          # if the test step died on its very first command.
+          touch test-escalation.txt test-matrix-status.txt
+
+      # This is where, and nowhere else, compatibility is asserted:
+      # supported_minecraft_versions drives what the stores announce, so it is
+      # only written after proof (build + server + the mod's own assertions).
+      - name: Mark the version as compatible
+        if: steps.update.outputs.status == 'updated' && steps.tests.outcome == 'success'
+        env:
+          MC: ${{ steps.update.outputs.minecraft_version }}
+        run: |
+          set -euo pipefail
+          python3 .mc-bump/scripts/mc-bump.py --mark-supported
+          git add -u
+
+          BODY="$(awk '{ printf "%s %s -> %s\n", $1, $2, $3 }' test-escalation.txt)"
+          MESSAGE=(-m "chore(mc): validate Minecraft $MC (build + headless server)")
+          if [ -n "$BODY" ]; then
+            MESSAGE+=(-m "Needed an escalation of the frozen dependencies:"$'\n'"$BODY")
+          fi
+          git diff --cached --quiet || git commit "${MESSAGE[@]}"
+
+      # Mirror image: the mod does not work, so the branch must not keep claiming
+      # it does. Only the compatibility claims are restored; the version bumps,
+      # including whatever the ladder tried, are kept for a manual fix.
+      - name: Revert unproven compatibility
+        if: steps.update.outputs.status == 'updated' && steps.tests.outcome != 'success'
+        env:
+          MC: ${{ steps.update.outputs.minecraft_version }}
+        run: |
+          set -euo pipefail
+          python3 .mc-bump/scripts/mc-bump.py --revert-compat
+          git add -u
+
+          BODY="$(awk '{ printf "%s %s -> %s\n", $1, $2, $3 }' test-escalation.txt)"
+          MESSAGE=(-m "chore(mc): revert unproven compatibility for $MC")
+          if [ -n "$BODY" ]; then
+            MESSAGE+=(-m "Escalation did not help, the bumps are kept anyway:"$'\n'"$BODY")
+          fi
+          git diff --cached --quiet || git commit "${MESSAGE[@]}"
+
+      - name: Upload the logs
+        if: steps.update.outputs.status == 'updated'
+        uses: actions/upload-artifact@v7
+        with:
+          name: matrix-logs-${{ steps.update.outputs.minecraft_version }}
+          path: |
+            test-matrix.log
+            test-escalation.txt
+            test-matrix-status.txt
+            server-test-*.log
+            run/logs/
+          retention-days: ${{ steps.setup.outputs.retention_days }}
+          if-no-files-found: ignore
+
+      # The matrix here is one step, not one job per version, so it produces one
+      # report — with the per-version detail in the pull request table below.
+      - if: steps.update.outputs.status == 'updated' && steps.tests.outcome != 'success'
+        uses: ./.mc-bump/.github/actions/report
+        with:
+          name: matrix
+          title: Version matrix — Minecraft ${{ steps.update.outputs.minecraft_version }}
+          kind: server
+          outcome: ${{ steps.tests.outcome }}
+          log: test-matrix.log
+          retention-days: ${{ steps.setup.outputs.retention_days }}
+
+      # --- Pull request ----------------------------------------------------
+      - name: Write the PR body
+        id: body
+        if: steps.update.outputs.status == 'updated'
+        env:
+          MOD_ID: ${{ steps.setup.outputs.mod_id }}
+          MC: ${{ steps.update.outputs.minecraft_version }}
+          PREVIOUS: ${{ steps.update.outputs.previous_version }}
+          LOADER_KEY: ${{ steps.final.outputs.loader_key }}
+          LOADER: ${{ steps.final.outputs.loader_version }}
+          API_KEY: ${{ steps.final.outputs.api_key }}
+          API: ${{ steps.final.outputs.api_version }}
+          BUILDTOOL_KEY: ${{ steps.final.outputs.buildtool_key }}
+          BUILDTOOL: ${{ steps.final.outputs.buildtool_version }}
+          AVAILABLE_LOADER: ${{ steps.update.outputs.available_loader_version }}
+          AVAILABLE_API: ${{ steps.update.outputs.available_api_version }}
+          JAVA: ${{ steps.update.outputs.java_version }}
+          MOD_VERSION: ${{ steps.update.outputs.mod_version }}
+          RANGE: ${{ steps.update.outputs.minecraft_range }}
+          TESTS: ${{ steps.tests.outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          if [ "$TESTS" = "success" ]; then
+            echo "draft=false" >> "$GITHUB_OUTPUT"
+            PASSED=true
+          else
+            echo "draft=true" >> "$GITHUB_OUTPUT"
+            PASSED=false
+          fi
+
+          # jq assembles the arguments, so no markdown ever travels through a
+          # shell variable. That nesting of heredocs is exactly what used to break
+          # silently in this step.
+          jq -n \
+            --arg mod_id "$MOD_ID" \
+            --arg minecraft "$MC" \
+            --arg previous "$PREVIOUS" \
+            --arg loader_name "$LOADER_KEY" \
+            --arg loader_version "$LOADER" \
+            --arg api_name "$API_KEY" \
+            --arg api_version "$API" \
+            --arg available_loader "$AVAILABLE_LOADER" \
+            --arg available_api "$AVAILABLE_API" \
+            --arg buildtool_name "$BUILDTOOL_KEY" \
+            --arg buildtool_version "$BUILDTOOL" \
+            --arg java "$JAVA" \
+            --arg mod_version "$MOD_VERSION" \
+            --arg compat_range "$RANGE" \
+            --argjson tests_passed "$PASSED" \
+            --arg matrix_status "$(cat test-matrix-status.txt)" \
+            --arg escalation "$(cat test-escalation.txt)" \
+            --arg run_url "$RUN_URL" \
+            --arg workflow_file "mc-bump/.github/workflows/auto-update.yml" \
+            '$ARGS.named' > pr-data.json
+
+          PYTHONPATH=.mc-bump python3 -m lib.report --pr-body pr-data.json --out pr-body.md
+
+      # A PR opened with the default GITHUB_TOKEN does NOT trigger pull_request
+      # workflows, so the mod's ci.yml will not run on it. Harmless: this workflow
+      # already built and booted the branch itself.
+      # Requires Settings > Actions > "Allow GitHub Actions to create and approve
+      # pull requests".
+      - name: Push and open the pull request
+        id: pr
+        if: steps.update.outputs.status == 'updated'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MC: ${{ steps.update.outputs.minecraft_version }}
+          BRANCH_PREFIX: ${{ steps.setup.outputs.branch_prefix }}
+          ASSIGNEE: ${{ steps.setup.outputs.assignee }}
+          DRAFT: ${{ steps.body.outputs.draft }}
+          # A scheduled run always runs from the default branch, so this is the
+          # default branch in production; a manual run from a feature branch
+          # targets that branch, which keeps the test PR down to the version bump.
+          BASE: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          BRANCH="${BRANCH_PREFIX}${MC}"
+          TITLE="chore: support Minecraft $MC"
+
+          # --force: the branch may survive a previous run of this workflow. It is
+          # never deleted: a failed update is meant to be picked up from here.
+          git push --force origin "$BRANCH"
+
+          gh label create minecraft-update \
+            --color ededed \
+            --description "Automatic Minecraft version update" \
+            --force
+
+          ASSIGN=()
+          if [ -n "$ASSIGNEE" ]; then ASSIGN+=(--assignee "$ASSIGNEE"); fi
+
+          PR="$(gh pr list --head "$BRANCH" --state open --json number -q '.[0].number' || true)"
+          if [ -n "$PR" ]; then
+            gh pr edit "$PR" --title "$TITLE" --body-file pr-body.md \
+              ${ASSIGNEE:+--add-assignee "$ASSIGNEE"}
+            # || true: gh errors out when the PR is already in the target state
+            if [ "$DRAFT" = "true" ]; then
+              gh pr ready "$PR" --undo || true
+            else
+              gh pr ready "$PR" || true
+            fi
+          else
+            DRAFT_FLAG=()
+            if [ "$DRAFT" = "true" ]; then DRAFT_FLAG+=(--draft); fi
+            gh pr create \
+              --base "$BASE" --head "$BRANCH" \
+              --title "$TITLE" --body-file pr-body.md \
+              --label minecraft-update \
+              ${ASSIGN[@]+"${ASSIGN[@]}"} \
+              ${DRAFT_FLAG[@]+"${DRAFT_FLAG[@]}"}
+            PR="$(gh pr list --head "$BRANCH" --state open --json number -q '.[0].number')"
+          fi
+          echo "number=$PR" >> "$GITHUB_OUTPUT"
+
+      # The draft PR alone notifies nobody. This is what says a new Minecraft
+      # version broke the mod, with the matrix log in a collapsible block.
+      - name: Report the failure
+        if: steps.update.outputs.status == 'updated' && steps.tests.outcome != 'success'
+        uses: ./.mc-bump/.github/actions/report-issue
+        with:
+          assignee: ${{ steps.setup.outputs.assignee }}
+          label: minecraft-update
+          log-tail: ${{ steps.setup.outputs.log_tail }}
+          branch: ${{ steps.setup.outputs.branch_prefix }}${{ steps.update.outputs.minecraft_version }}
+          token: ${{ github.token }}
+          intro: >-
+            The automatic update to Minecraft
+            `${{ steps.update.outputs.minecraft_version }}` left the mod broken.
+            The compatibility range was reverted on the branch, so the mod does
+            not claim to support it; the dependency bumps are kept as a starting
+            point.
+          extra: >-
+            Draft pull request: #${{ steps.pr.outputs.number }}
+
+      # The matrix runs with continue-on-error so that the revert, the pull
+      # request and the issue still happen after a failure; that is the whole
+      # point of this workflow. The side effect is that the run would end GREEN
+      # while the mod is broken. Last step, so everything above already reported.
+      - name: Fail the run when the matrix did not pass
+        if: steps.update.outputs.status == 'updated' && steps.tests.outcome != 'success'
+        env:
+          MC: ${{ steps.update.outputs.minecraft_version }}
+        run: |
+          echo "::error::the version matrix failed on Minecraft $MC, even after the escalation ladder. The compatibility claims were reverted; see the draft pull request and the issue."
+          exit 1

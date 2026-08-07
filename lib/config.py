@@ -63,9 +63,15 @@ class Field:
                 raise Failure(f"{path}: expected a positive number, got {value}")
             return value
         if self.type is str:
-            if not isinstance(value, str) or not value.strip():
-                raise Failure(f"{path}: expected a non-empty string, got {value!r}")
+            if not isinstance(value, str):
+                raise Failure(f"{path}: expected a string, got {value!r}")
             value = value.strip()
+            if not value:
+                # A field whose default is "" accepts being spelled out as empty:
+                # writing `assignee: ""` to mean "nobody" must not be an error.
+                if self.required or self.default != "":
+                    raise Failure(f"{path}: expected a non-empty string")
+                return ""
             if self.choices and value not in self.choices:
                 raise Failure(
                     f"{path}: '{value}' is not one of {', '.join(self.choices)}"

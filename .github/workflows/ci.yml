@@ -1,65 +1,361 @@
-name: CI
+name: mc-bump CI
+
+# Called by a mod's own .github/workflows/ci.yml:
+#
+#   jobs:
+#     ci:
+#       uses: spatulox-minecraft/mc-bump/.github/workflows/ci.yml@v1
+#       secrets: inherit
+#
+# Three independent kinds of test, three jobs, so a red one names itself:
+#
+#   unit-tests   pure JVM logic, seconds
+#   matrix       build + boot a server, ONE JOB PER CLAIMED VERSION, in parallel
+#   gametest     a real client, slow and flaky, usually non blocking
+#
+# The matrix is the point of this workflow. The compatibility range promises a
+# whole Minecraft series, so testing only the newest version proves nothing about
+# the others — which are exactly the versions the stores announce.
 
 on:
-  push:
-    branches: [master]
-  pull_request:
-  workflow_dispatch:
+  workflow_call:
+    inputs:
+      mc-bump-ref:
+        description: >
+          Which mc-bump to run. Only worth changing to test mc-bump itself from a
+          branch; a nested `uses:` cannot take an expression, so this is passed to
+          actions/checkout instead.
+        type: string
+        default: v1
+        required: false
 
-concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+permissions:
+  contents: read
+  issues: write
 
 jobs:
-  build-and-test:
-    name: Build + headless server
+  # Cheap and first: everything downstream branches on this, and reading a config
+  # must not cost a JDK.
+  config:
+    name: Read the config
     runs-on: ubuntu-latest
-    timeout-minutes: 40
-
+    outputs:
+      ci: ${{ steps.setup.outputs.ci }}
+      unit_tests: ${{ steps.setup.outputs.unit_tests }}
+      unit_source: ${{ steps.setup.outputs.unit_source }}
+      unit_task: ${{ steps.setup.outputs.unit_task }}
+      unit_require_non_empty: ${{ steps.setup.outputs.unit_require_non_empty }}
+      matrix: ${{ steps.setup.outputs.matrix }}
+      gametest: ${{ steps.setup.outputs.gametest }}
+      gametest_blocking: ${{ steps.setup.outputs.gametest_blocking }}
+      client_gametest_task: ${{ steps.setup.outputs.client_gametest_task }}
+      versions: ${{ steps.setup.outputs.versions }}
+      java: ${{ steps.setup.outputs.java }}
+      mod_id: ${{ steps.setup.outputs.mod_id }}
+      assignee: ${{ steps.setup.outputs.assignee }}
+      label: ${{ steps.setup.outputs.label }}
+      log_tail: ${{ steps.setup.outputs.log_tail }}
+      on_pull_request: ${{ steps.setup.outputs.on_pull_request }}
+      retention_days: ${{ steps.setup.outputs.retention_days }}
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          repository: spatulox-minecraft/mc-bump
+          ref: ${{ inputs.mc-bump-ref }}
+          path: .mc-bump
+      - id: setup
+        uses: ./.mc-bump/.github/actions/setup
 
-      # First, and before the JDK: these are pure functions over the standard
-      # library, they need nothing but python3 and they run in a hundredth of a
-      # second. A regression in the compatibility logic therefore fails in
-      # seconds rather than at the end of a build.
-      #
-      # They also exist to be RUN. An unrun test rots silently, as src/gametest
-      # demonstrates: it stopped compiling at the 26.2 update and no workflow
-      # noticed.
-      - name: Unit tests
-        run: python3 -m unittest discover -s scripts --verbose
+  unit-tests:
+    name: Unit tests
+    needs: config
+    if: needs.config.outputs.ci == 'true' && needs.config.outputs.unit_tests == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          repository: spatulox-minecraft/mc-bump
+          ref: ${{ inputs.mc-bump-ref }}
+          path: .mc-bump
 
-      # java_version is derived from the Minecraft version by
-      # scripts/update-mc-version.py, so the JDK follows a Minecraft bump on its own.
-      - name: Read the Java version
-        id: java
-        run: echo "version=$(sed -n 's/^java_version=//p' gradle.properties | tr -d '[:space:]')" >> "$GITHUB_OUTPUT"
-
-      - name: Set up JDK ${{ steps.java.outputs.version }}
-        uses: actions/setup-java@v5
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: ${{ steps.java.outputs.version }}
+          java-version: ${{ needs.config.outputs.java }}
+      - uses: gradle/actions/setup-gradle@v5
 
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v5
-
-      - name: Build
+      # `gradlew test` on a project with no test source set passes with zero
+      # tests, which is a green proving nothing. Refusing is the whole reason
+      # tests.unit.require-non-empty exists.
+      - name: Check that there is something to run
+        if: needs.config.outputs.unit_require_non_empty == 'true'
+        env:
+          SOURCE: ${{ needs.config.outputs.unit_source }}
         run: |
+          set -euo pipefail
+          if [ -z "$(find "$SOURCE" -name '*.java' -print -quit 2>/dev/null)" ]; then
+            echo "::error::tests.unit.require-non-empty is set but $SOURCE holds no .java file. Write a test, or set it to false."
+            exit 1
+          fi
+
+      - name: Run the unit tests
+        id: tests
+        continue-on-error: true
+        env:
+          TASK: ${{ needs.config.outputs.unit_task }}
+        run: |
+          set -o pipefail
           chmod +x gradlew
-          ./gradlew build --stacktrace
+          ./gradlew "$TASK" --stacktrace --console=plain 2>&1 | tee unit-tests.log
 
-      - name: Headless server test
-        run: bash .github/scripts/headless-server-test.sh
-
-      - name: Upload logs
-        if: failure()
+      - name: Upload the test reports
+        if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: server-logs
+          name: unit-test-reports
           path: |
-            server-test.log
-            run/logs/
-          retention-days: 7
+            build/reports/tests/
+            build/test-results/
+          retention-days: ${{ needs.config.outputs.retention_days }}
           if-no-files-found: ignore
+
+      - if: always()
+        uses: ./.mc-bump/.github/actions/report
+        with:
+          name: unit
+          title: Unit tests (JUnit)
+          kind: unit
+          outcome: ${{ steps.tests.outcome }}
+          log: unit-tests.log
+          retention-days: ${{ needs.config.outputs.retention_days }}
+
+      # The step above runs with continue-on-error so the report is always
+      # uploaded; this is what actually reddens the job.
+      - name: Fail when the tests failed
+        if: steps.tests.outcome != 'success'
+        run: exit 1
+
+  # One job per claimed Minecraft version. Replaces the sequential bash loop:
+  # three versions now cost one build's wall time instead of three.
+  matrix:
+    name: Build + server (${{ matrix.minecraft }})
+    needs: config
+    if: needs.config.outputs.ci == 'true' && needs.config.outputs.matrix == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      # A version failing must not hide the state of the others: knowing whether
+      # 26.1 broke too is what tells a dependency bump apart from a code bug.
+      fail-fast: false
+      matrix:
+        minecraft: ${{ fromJson(needs.config.outputs.versions) }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          repository: spatulox-minecraft/mc-bump
+          ref: ${{ inputs.mc-bump-ref }}
+          path: .mc-bump
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: ${{ needs.config.outputs.java }}
+      - uses: gradle/actions/setup-gradle@v5
+
+      - name: Install PyYAML
+        run: python3 -m pip install --quiet --disable-pip-version-check pyyaml
+
+      - name: Build
+        id: build
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          chmod +x gradlew
+          ./gradlew build "-Pminecraft_version=${{ matrix.minecraft }}" \
+            --stacktrace --console=plain 2>&1 | tee "build-${{ matrix.minecraft }}.log"
+
+      - name: Headless server
+        id: server
+        if: steps.build.outcome == 'success'
+        continue-on-error: true
+        env:
+          LOG: server-test-${{ matrix.minecraft }}.log
+          EXPECTED_MC: ${{ matrix.minecraft }}
+          GRADLE_ARGS: -Pminecraft_version=${{ matrix.minecraft }}
+        run: bash .mc-bump/scripts/headless-server-test.sh
+
+      # One report per job, and the kind says which half broke: a build failure
+      # explains a server failure, so the issue lists them in that order.
+      - name: Assemble the log to report
+        if: always()
+        env:
+          MC: ${{ matrix.minecraft }}
+        run: cat "build-$MC.log" "server-test-$MC.log" > "matrix-$MC.log" 2>/dev/null || true
+
+      - if: always()
+        uses: ./.mc-bump/.github/actions/report
+        with:
+          name: matrix-${{ matrix.minecraft }}
+          title: ${{ steps.build.outcome != 'success' && format('Build — Minecraft {0}', matrix.minecraft) || format('Headless server — Minecraft {0}', matrix.minecraft) }}
+          kind: ${{ steps.build.outcome != 'success' && 'build' || 'server' }}
+          outcome: ${{ steps.build.outcome == 'success' && steps.server.outcome || steps.build.outcome }}
+          log: matrix-${{ matrix.minecraft }}.log
+          retention-days: ${{ needs.config.outputs.retention_days }}
+
+      - name: Upload the server logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: server-logs-${{ matrix.minecraft }}
+          path: |
+            build-${{ matrix.minecraft }}.log
+            server-test-${{ matrix.minecraft }}.log
+            run/logs/
+          retention-days: ${{ needs.config.outputs.retention_days }}
+          if-no-files-found: ignore
+
+      - name: Fail when this version is broken
+        if: steps.build.outcome != 'success' || steps.server.outcome != 'success'
+        run: exit 1
+
+  # A real Minecraft client under xvfb: slow, flaky, and usually declared non
+  # blocking. It still reports, which is the point — an unrun test rots silently.
+  gametest:
+    name: Client gametest
+    needs: config
+    if: needs.config.outputs.ci == 'true' && needs.config.outputs.gametest == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    outputs:
+      # Read by report-failure. A non blocking job ends green, so its result
+      # cannot be what tells the reporter something went wrong.
+      failed: ${{ steps.gametest.outcome != 'success' }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          repository: spatulox-minecraft/mc-bump
+          ref: ${{ inputs.mc-bump-ref }}
+          path: .mc-bump
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: ${{ needs.config.outputs.java }}
+      - uses: gradle/actions/setup-gradle@v5
+
+      - name: Install xvfb
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq xvfb
+
+      - name: Run the client gametest
+        id: gametest
+        continue-on-error: true
+        env:
+          TASK: ${{ needs.config.outputs.client_gametest_task }}
+        run: |
+          set -o pipefail
+          chmod +x gradlew
+          xvfb-run -a ./gradlew "$TASK" --stacktrace --console=plain 2>&1 \
+            | tee gametest.log
+
+      - if: always()
+        uses: ./.mc-bump/.github/actions/report
+        with:
+          name: gametest
+          title: Client gametest
+          kind: gametest
+          outcome: ${{ steps.gametest.outcome }}
+          log: gametest.log
+          retention-days: ${{ needs.config.outputs.retention_days }}
+
+      - name: Upload the screenshots
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: gametest-artifacts
+          path: |
+            gametest.log
+            run/screenshots/
+            run/logs/
+          retention-days: ${{ needs.config.outputs.retention_days }}
+          if-no-files-found: ignore
+
+      # Only when the mod asked for it. Otherwise the job stays green and only
+      # the failure issue says something is wrong.
+      - name: Fail when the gametest is blocking
+        if: steps.gametest.outcome != 'success' && needs.config.outputs.gametest_blocking == 'true'
+        run: exit 1
+
+  report-failure:
+    name: Report the failures
+    needs: [config, unit-tests, matrix, gametest]
+    # `contains(needs.*.result, 'failure')` covers the blocking jobs; the gametest
+    # output covers the non blocking one, which ends green by design.
+    if: >-
+      always()
+      && needs.config.result == 'success'
+      && (contains(needs.*.result, 'failure') || needs.gametest.outputs.failed == 'true')
+      && (github.event_name != 'pull_request' || needs.config.outputs.on_pull_request == 'true')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          repository: spatulox-minecraft/mc-bump
+          ref: ${{ inputs.mc-bump-ref }}
+          path: .mc-bump
+
+      - uses: ./.mc-bump/.github/actions/report-issue
+        with:
+          assignee: ${{ needs.config.outputs.assignee }}
+          label: ${{ needs.config.outputs.label }}
+          log-tail: ${{ needs.config.outputs.log_tail }}
+          branch: ${{ github.ref_name }}
+          token: ${{ github.token }}
+
+  # The Actions tab must not say the opposite of the truth. The gametest is
+  # excluded on purpose: it fails its own job when it is blocking, and that
+  # failure arrives here through needs.gametest.result.
+  verdict:
+    name: Verdict
+    needs: [config, unit-tests, matrix, gametest]
+    if: always() && needs.config.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail when a required job did not pass
+        env:
+          UNIT: ${{ needs.unit-tests.result }}
+          MATRIX: ${{ needs.matrix.result }}
+          GAMETEST: ${{ needs.gametest.result }}
+          GAMETEST_FAILED: ${{ needs.gametest.outputs.failed }}
+        run: |
+          set -euo pipefail
+          BROKEN=""
+          # "skipped" is a legitimate outcome: the mod disabled that pipeline.
+          for pair in "unit tests:$UNIT" "version matrix:$MATRIX" "gametest:$GAMETEST"; do
+            NAME="${pair%%:*}"
+            RESULT="${pair##*:}"
+            case "$RESULT" in
+              success|skipped|"") ;;
+              *) BROKEN="$BROKEN $NAME" ;;
+            esac
+          done
+
+          if [ "$GAMETEST_FAILED" = "true" ] && [ "$GAMETEST" = "success" ]; then
+            echo "::warning::the client gametest failed but is declared non blocking"
+          fi
+
+          if [ -n "$BROKEN" ]; then
+            echo "::error::failed:$BROKEN"
+            exit 1
+          fi
+          echo "### All required checks passed :white_check_mark:" >> "$GITHUB_STEP_SUMMARY"

@@ -1,83 +1,115 @@
-name: Release
+name: mc-bump release
 
-# Publishes the mod to Modrinth and CurseForge once a new version lands on master,
-# then tags the commit.
+# Publishes the mod to each configured store, then tags the commit.
 #
-# The trigger is mod_version, not "supported_minecraft_versions grew": the tag
-# carries mod_version, so it is the only field that guarantees a unique name, and
-# it covers manual mod releases (1.1.0 -> 1.2.0 with no Minecraft change) too.
+# The trigger is mod_version, not "the claimed versions grew": the tag carries
+# mod_version, so it is the only field that guarantees a unique name, and it
+# covers a manual release (1.1.0 -> 1.2.0 with no Minecraft change) too.
 #
 # The tag means "this version is RELEASED", and is therefore pushed AFTER a
 # successful upload. That ordering is what makes a failure recoverable: no tag is
-# left behind, so re-running the workflow simply tries again. Tagging first would
-# leave a tag that makes every re-run skip the publication.
+# left behind, so re-running simply tries again.
 #
-# Accepted limitation: a patch bump (26.1.1 -> 26.1.2) does not change the series,
-# hence no new tag. supported_minecraft_versions and depends.minecraft keep the
-# record of it.
+# One job per store, and each one is individually replayable. That is not
+# cosmetic: with a single publish task, Modrinth succeeding and CurseForge
+# failing left the run with no tag, and every re-run hit "version already exists"
+# on Modrinth — the pipeline could never finish again without a human. A marker
+# tag per store is what makes a re-run skip what is already out there.
 
 on:
-  push:
-    branches: [master]
-    paths:
-      - gradle.properties
-  workflow_dispatch:
+  workflow_call:
+    inputs:
+      mc-bump-ref:
+        type: string
+        default: v1
+        required: false
+      dry-run:
+        description: Do everything except the uploads and the tag.
+        type: boolean
+        default: false
+        required: false
+    secrets:
+      MODRINTH_TOKEN:
+        required: false
+      CURSEFORGE_TOKEN:
+        required: false
 
 permissions:
   contents: write
+  issues: write
 
-# cancel-in-progress stays false: an upload must never be cut in flight.
 concurrency:
-  group: release
+  # cancel-in-progress stays false: an upload must never be cut in flight.
+  group: mc-bump-release
   cancel-in-progress: false
 
 jobs:
-  # Decides whether to publish, and refuses early. Nothing here writes anything:
-  # the expensive job below only starts once both guards are cleared.
+  config:
+    name: Read the config
+    runs-on: ubuntu-latest
+    outputs:
+      release: ${{ steps.setup.outputs.release }}
+      stores: ${{ steps.setup.outputs.stores }}
+      versions: ${{ steps.setup.outputs.versions }}
+      java: ${{ steps.setup.outputs.java }}
+      tag: ${{ steps.setup.outputs.tag }}
+      mod_version: ${{ steps.setup.outputs.mod_version }}
+      minecraft: ${{ steps.setup.outputs.minecraft }}
+      assignee: ${{ steps.setup.outputs.assignee }}
+      label: ${{ steps.setup.outputs.label }}
+      log_tail: ${{ steps.setup.outputs.log_tail }}
+      retention_days: ${{ steps.setup.outputs.retention_days }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          repository: spatulox-minecraft/mc-bump
+          ref: ${{ inputs.mc-bump-ref }}
+          path: .mc-bump
+      - id: setup
+        uses: ./.mc-bump/.github/actions/setup
+
+  # Refuses early and writes nothing. The expensive matrix below only starts once
+  # every guard is cleared — including the secrets, which used to be discovered
+  # missing after ninety minutes of testing.
   check:
     name: Should we publish?
+    needs: config
+    if: needs.config.outputs.release == 'true'
     runs-on: ubuntu-latest
     outputs:
       publish: ${{ steps.check.outputs.publish }}
-      tag: ${{ steps.check.outputs.tag }}
-      java: ${{ steps.check.outputs.java }}
-
     steps:
       - uses: actions/checkout@v7
         with:
           # the existing tags are needed to know whether this version is already out
           fetch-depth: 0
 
-      - name: Check the version and the compatibility claims
+      - name: Check the version, the claims and the secrets
         id: check
+        env:
+          TAG: ${{ needs.config.outputs.tag }}
+          MC: ${{ needs.config.outputs.minecraft }}
+          MOD_VERSION: ${{ needs.config.outputs.mod_version }}
+          STORES: ${{ needs.config.outputs.stores }}
+          MODRINTH_TOKEN: ${{ secrets.MODRINTH_TOKEN }}
+          CURSEFORGE_TOKEN: ${{ secrets.CURSEFORGE_TOKEN }}
         run: |
           set -euo pipefail
 
-          prop() { sed -n "s/^$1=//p" gradle.properties | head -n 1 | tr -d '[:space:]'; }
-
-          MOD_VERSION="$(prop mod_version)"
-          if [ -z "$MOD_VERSION" ]; then
-            echo "::error::mod_version missing from gradle.properties"
-            exit 1
-          fi
-          TAG="v$MOD_VERSION"
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-
-          # Idempotent: "the tag does not exist yet" is the whole condition, and it
-          # is safe to replay. No need to diff against the previous commit.
+          # Idempotent: "the release tag does not exist yet" is the whole
+          # condition, and it is safe to replay.
           if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
             echo "publish=false" >> "$GITHUB_OUTPUT"
             echo "### \`$TAG\` is already released, nothing to do." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
 
-          # Merging a DRAFT pull request (the matrix failed) leaves minecraft_version
-          # bumped while --revert-compat restored the previous, shorter
-          # supported_minecraft_versions. Publishing then would ship a jar built
-          # against the new version while announcing the old one. build.gradle's
-          # requireSupportedVersions only catches the empty list.
-          MC="$(prop minecraft_version)"
-          SUPPORTED="$(prop supported_minecraft_versions)"
+          # Merging a DRAFT pull request (the matrix failed) leaves
+          # minecraft_version bumped while the revert restored the previous,
+          # shorter supported_minecraft_versions. Publishing then would ship a jar
+          # built against the new version while announcing the old one.
+          SUPPORTED="$(sed -n 's/^supported_minecraft_versions=//p' gradle.properties | head -n 1 | tr -d '[:space:]')"
           case ",$SUPPORTED," in
             *",$MC,"*) ;;
             *)
@@ -86,9 +118,21 @@ jobs:
               ;;
           esac
 
-          echo "publish=true" >> "$GITHUB_OUTPUT"
-          echo "java=$(prop java_version)" >> "$GITHUB_OUTPUT"
+          # A token missing or expired is a two second check here, or a ninety
+          # minute one after the matrix.
+          MISSING=""
+          case ",$STORES," in
+            *,modrinth,*)   [ -n "${MODRINTH_TOKEN:-}" ]   || MISSING="$MISSING MODRINTH_TOKEN" ;;
+          esac
+          case ",$STORES," in
+            *,curseforge,*) [ -n "${CURSEFORGE_TOKEN:-}" ] || MISSING="$MISSING CURSEFORGE_TOKEN" ;;
+          esac
+          if [ -n "$MISSING" ]; then
+            echo "::error::release.stores lists $STORES but these secrets are empty:$MISSING"
+            exit 1
+          fi
 
+          echo "publish=true" >> "$GITHUB_OUTPUT"
           {
             echo "### Releasing \`$TAG\` :rocket:"
             echo
@@ -96,110 +140,258 @@ jobs:
             echo "|---|---|"
             echo "| Minecraft | \`$MC\` |"
             echo "| announced | \`$SUPPORTED\` |"
+            echo "| stores | \`$STORES\` |"
+            echo "| dry run | \`${{ inputs.dry-run }}\` |"
           } >> "$GITHUB_STEP_SUMMARY"
 
-  publish:
-    name: Test and publish
-    needs: check
+  # The matrix, not a single smoke test: it proves every version listed in
+  # supported_minecraft_versions, which is exactly what the stores announce.
+  # Proving only the newest would publish claims about the rest.
+  matrix:
+    name: Build + server (${{ matrix.minecraft }})
+    needs: [config, check]
     if: needs.check.outputs.publish == 'true'
     runs-on: ubuntu-latest
-    # the matrix builds and boots a server per claimed version, and retries once
-    # on a loom setup hang
-    timeout-minutes: 90
-
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        minecraft: ${{ fromJson(needs.config.outputs.versions) }}
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          repository: spatulox-minecraft/mc-bump
+          ref: ${{ inputs.mc-bump-ref }}
+          path: .mc-bump
 
-      # java_version is derived from the Minecraft version by
-      # scripts/update-mc-version.py, so the JDK follows a Minecraft bump on its own.
-      - name: Set up JDK ${{ needs.check.outputs.java }}
-        uses: actions/setup-java@v5
+      - uses: actions/setup-java@v5
         with:
           distribution: temurin
-          java-version: ${{ needs.check.outputs.java }}
+          java-version: ${{ needs.config.outputs.java }}
+      - uses: gradle/actions/setup-gradle@v5
 
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v5
+      - name: Install PyYAML
+        run: python3 -m pip install --quiet --disable-pip-version-check pyyaml
 
-      # The matrix, not the single smoke test: it proves every version listed in
-      # supported_minecraft_versions, which is exactly what gameVersions announces
-      # to players. Proving only the newest would publish claims about the rest.
-      - name: Build and boot every claimed version
+      - name: Build
+        id: build
+        continue-on-error: true
         run: |
           set -o pipefail
           chmod +x gradlew
-          bash .github/scripts/test-matrix.sh 2>&1 | tee test-matrix.log
+          ./gradlew build "-Pminecraft_version=${{ matrix.minecraft }}" \
+            --stacktrace --console=plain 2>&1 | tee "build-${{ matrix.minecraft }}.log"
 
-      - name: Publish to Modrinth and CurseForge
-        env:
-          MODRINTH_TOKEN: ${{ secrets.MODRINTH_TOKEN }}
-          CURSEFORGE_TOKEN: ${{ secrets.CURSEFORGE_TOKEN }}
-        run: ./gradlew publishMod --stacktrace
-
-      # Cosmetic, and it runs AFTER the upload: continue-on-error so a failure
-      # here cannot fail the job, which would skip the tag job on an already
-      # published version and make any re-run hit a duplicate version number.
-      - name: Recap
+      - name: Headless server
+        id: server
+        if: steps.build.outcome == 'success'
         continue-on-error: true
-        run: |
-          set -euo pipefail
-          prop() { sed -n "s/^$1=//p" gradle.properties | head -n 1 | tr -d '[:space:]'; }
-          {
-            echo "### Published \`$(prop mod_version)\` :package:"
-            echo
-            echo "Game versions announced: \`$(prop supported_minecraft_versions)\`"
-            echo
-            echo '```'
-            ./gradlew --quiet printChangelog
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+        env:
+          LOG: server-test-${{ matrix.minecraft }}.log
+          EXPECTED_MC: ${{ matrix.minecraft }}
+          GRADLE_ARGS: -Pminecraft_version=${{ matrix.minecraft }}
+        run: bash .mc-bump/scripts/headless-server-test.sh
 
-      - name: Upload logs
-        if: failure()
+      - name: Assemble the log to report
+        if: always()
+        env:
+          MC: ${{ matrix.minecraft }}
+        run: cat "build-$MC.log" "server-test-$MC.log" > "matrix-$MC.log" 2>/dev/null || true
+
+      - if: always()
+        uses: ./.mc-bump/.github/actions/report
+        with:
+          name: matrix-${{ matrix.minecraft }}
+          title: ${{ steps.build.outcome != 'success' && format('Build — Minecraft {0}', matrix.minecraft) || format('Headless server — Minecraft {0}', matrix.minecraft) }}
+          kind: ${{ steps.build.outcome != 'success' && 'build' || 'server' }}
+          outcome: ${{ steps.build.outcome == 'success' && steps.server.outcome || steps.build.outcome }}
+          log: matrix-${{ matrix.minecraft }}.log
+          retention-days: ${{ needs.config.outputs.retention_days }}
+
+      - name: Upload the logs
+        if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: release-logs-${{ needs.check.outputs.tag }}
+          name: release-logs-${{ matrix.minecraft }}
           path: |
-            test-matrix.log
-            server-test-*.log
+            build-${{ matrix.minecraft }}.log
+            server-test-${{ matrix.minecraft }}.log
             run/logs/
-          retention-days: 30
+          retention-days: ${{ needs.config.outputs.retention_days }}
           if-no-files-found: ignore
 
-  # Only reached once the upload succeeded: the tag is the record of a release,
-  # not of a merge.
-  tag:
-    name: Tag the released version
-    needs: [check, publish]
-    runs-on: ubuntu-latest
+      - name: Fail when this version is broken
+        if: steps.build.outcome != 'success' || steps.server.outcome != 'success'
+        run: exit 1
 
+  publish-modrinth:
+    name: Publish to Modrinth
+    needs: [config, check, matrix]
+    if: needs.check.outputs.publish == 'true' && contains(needs.config.outputs.stores, 'modrinth')
+    runs-on: ubuntu-latest
+    outputs:
+      done: ${{ steps.marker.outputs.skip == 'true' && 'skipped' || 'published' }}
     steps:
       - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      # A marker tag rather than an API call: the same mechanism has to work for
+      # both stores, and CurseForge's listing API needs a separate "core" key that
+      # the upload token is not. `git ls-remote` costs no secret at all.
+      - name: Has this version already been uploaded?
+        id: marker
+        env:
+          MARKER: published/modrinth/${{ needs.config.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ -n "$(git ls-remote --tags origin "refs/tags/$MARKER")" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "### Modrinth: \`$MARKER\` already exists, skipping." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-java@v5
+        if: steps.marker.outputs.skip != 'true'
+        with:
+          distribution: temurin
+          java-version: ${{ needs.config.outputs.java }}
+      - uses: gradle/actions/setup-gradle@v5
+        if: steps.marker.outputs.skip != 'true'
+
+      - name: Upload
+        if: steps.marker.outputs.skip != 'true' && inputs.dry-run != true
+        env:
+          MODRINTH_TOKEN: ${{ secrets.MODRINTH_TOKEN }}
+        run: |
+          chmod +x gradlew
+          ./gradlew modrinth --stacktrace
+
+      - name: Build only (dry run)
+        if: steps.marker.outputs.skip != 'true' && inputs.dry-run == true
+        run: |
+          chmod +x gradlew
+          ./gradlew build --stacktrace
+          echo "### Dry run: Modrinth upload skipped." >> "$GITHUB_STEP_SUMMARY"
+
+      # AFTER the upload, for the same reason the release tag is pushed after the
+      # publication: a marker means "this is out there".
+      - name: Mark it as published
+        if: steps.marker.outputs.skip != 'true' && inputs.dry-run != true
+        env:
+          MARKER: published/modrinth/${{ needs.config.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag "$MARKER"
+          git push origin "$MARKER"
+
+  publish-curseforge:
+    name: Publish to CurseForge
+    needs: [config, check, matrix]
+    if: needs.check.outputs.publish == 'true' && contains(needs.config.outputs.stores, 'curseforge')
+    runs-on: ubuntu-latest
+    outputs:
+      done: ${{ steps.marker.outputs.skip == 'true' && 'skipped' || 'published' }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Has this version already been uploaded?
+        id: marker
+        env:
+          MARKER: published/curseforge/${{ needs.config.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if [ -n "$(git ls-remote --tags origin "refs/tags/$MARKER")" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "### CurseForge: \`$MARKER\` already exists, skipping." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-java@v5
+        if: steps.marker.outputs.skip != 'true'
+        with:
+          distribution: temurin
+          java-version: ${{ needs.config.outputs.java }}
+      - uses: gradle/actions/setup-gradle@v5
+        if: steps.marker.outputs.skip != 'true'
+
+      - name: Upload
+        if: steps.marker.outputs.skip != 'true' && inputs.dry-run != true
+        env:
+          CURSEFORGE_TOKEN: ${{ secrets.CURSEFORGE_TOKEN }}
+        run: |
+          chmod +x gradlew
+          ./gradlew publishCurseForge --stacktrace
+
+      - name: Build only (dry run)
+        if: steps.marker.outputs.skip != 'true' && inputs.dry-run == true
+        run: |
+          chmod +x gradlew
+          ./gradlew build --stacktrace
+          echo "### Dry run: CurseForge upload skipped." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Mark it as published
+        if: steps.marker.outputs.skip != 'true' && inputs.dry-run != true
+        env:
+          MARKER: published/curseforge/${{ needs.config.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag "$MARKER"
+          git push origin "$MARKER"
+
+  # Only reached once every enabled store is done: the tag records a release, not
+  # a merge. `skipped` counts as done — that store simply had nothing left to do.
+  tag:
+    name: Tag the released version
+    needs: [config, check, publish-modrinth, publish-curseforge]
+    if: >-
+      always()
+      && needs.check.outputs.publish == 'true'
+      && inputs.dry-run != true
+      && !contains(needs.*.result, 'failure')
+      && !contains(needs.*.result, 'cancelled')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          repository: spatulox-minecraft/mc-bump
+          ref: ${{ inputs.mc-bump-ref }}
+          path: .mc-bump
+
+      - name: Install PyYAML
+        run: python3 -m pip install --quiet --disable-pip-version-check pyyaml
 
       - name: Create the tag
         env:
-          TAG: ${{ needs.check.outputs.tag }}
+          TAG: ${{ needs.config.outputs.tag }}
         run: |
           set -euo pipefail
-
           prop() { sed -n "s/^$1=//p" gradle.properties | head -n 1 | tr -d '[:space:]'; }
 
           MC="$(prop minecraft_version)"
           SUPPORTED="$(prop supported_minecraft_versions)"
-          LOADER="$(prop loader_version)"
-          FABRIC_API="$(prop fabric_api_version)"
-          LOOM="$(prop loom_version)"
           JAVA="$(prop java_version)"
-          RANGE="$(python3 -c "import json;print(json.load(open('src/main/resources/fabric.mod.json'))['depends']['minecraft'])")"
+          RANGE="$(PYTHONPATH=.mc-bump python3 -c "
+          from lib.config import load
+          project = load()
+          print(project.loader.read_depends(project.paths, project.loader.depends_keys()['minecraft']))
+          ")"
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git tag -a "$TAG" -m "Minecraft $MC" \
             -m "supported_minecraft_versions: $SUPPORTED
-          depends.minecraft: $RANGE
-          fabric-loader: $LOADER
-          fabric-api: $FABRIC_API
-          fabric-loom: $LOOM
+          compatibility range: $RANGE
           java: $JAVA"
           git push origin "$TAG"
 
@@ -210,9 +402,34 @@ jobs:
             echo "|---|---|"
             echo "| Minecraft | \`$MC\` |"
             echo "| supported | \`$SUPPORTED\` |"
-            echo "| \`depends.minecraft\` | \`$RANGE\` |"
-            echo "| Fabric Loader | \`$LOADER\` |"
-            echo "| Fabric API | \`$FABRIC_API\` |"
-            echo "| fabric-loom | \`$LOOM\` |"
+            echo "| range | \`$RANGE\` |"
             echo "| Java | \`$JAVA\` |"
           } >> "$GITHUB_STEP_SUMMARY"
+
+  report-failure:
+    name: Report the failures
+    needs: [config, check, matrix, publish-modrinth, publish-curseforge, tag]
+    if: always() && needs.config.result == 'success' && contains(needs.*.result, 'failure')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/checkout@v7
+        with:
+          repository: spatulox-minecraft/mc-bump
+          ref: ${{ inputs.mc-bump-ref }}
+          path: .mc-bump
+
+      - uses: ./.mc-bump/.github/actions/report-issue
+        with:
+          assignee: ${{ needs.config.outputs.assignee }}
+          label: ${{ needs.config.outputs.label }}
+          log-tail: ${{ needs.config.outputs.log_tail }}
+          branch: ${{ github.ref_name }}
+          token: ${{ github.token }}
+          intro: >-
+            The release of `${{ needs.config.outputs.tag }}` did not complete.
+            Each store publishes in its own job and skips what is already
+            uploaded, so re-running this workflow is safe.

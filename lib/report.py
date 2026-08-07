@@ -303,6 +303,14 @@ def main(argv: list[str] | None = None) -> int:
         "--failure-issue", action="store_true", help="body of the failure issue"
     )
     parser.add_argument("--failure-title", action="store_true", help="its title")
+    parser.add_argument(
+        "--pr-body",
+        metavar="JSON",
+        help="body of the update pull request, from a JSON file holding the "
+        "keyword arguments of pr_body(). A file rather than a pile of flags: the "
+        "workflow already has every value in hand and jq can assemble them "
+        "without any shell quoting.",
+    )
     parser.add_argument("--reports-dir", default="reports")
     parser.add_argument("--workflow", default=os.environ.get("GITHUB_WORKFLOW", "CI"))
     parser.add_argument("--ref", default=os.environ.get("GITHUB_REF_NAME", "?"))
@@ -316,7 +324,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    if args.failure_title:
+    if args.pr_body:
+        try:
+            data = json.loads(Path(args.pr_body).read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise Failure(f"cannot read {args.pr_body}: {exc}") from exc
+        try:
+            rendered = pr_body(**data)
+        except TypeError as exc:
+            raise Failure(f"{args.pr_body} does not describe a pull request: {exc}") from exc
+    elif args.failure_title:
         rendered = failure_issue_title(args.workflow, args.ref)
     elif args.failure_issue:
         blocks = collect(Path(args.reports_dir))
@@ -331,7 +348,7 @@ def main(argv: list[str] | None = None) -> int:
             extra=args.extra,
         )
     else:
-        parser.error("choose --failure-issue or --failure-title")
+        parser.error("choose --failure-issue, --failure-title or --pr-body")
 
     if args.out:
         Path(args.out).write_text(rendered, encoding="utf-8")

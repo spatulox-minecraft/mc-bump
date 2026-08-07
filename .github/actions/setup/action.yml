@@ -1,0 +1,140 @@
+name: mc-bump setup
+description: >
+  Reads .github/mc-bump.yml from the mod repository and exposes it as job
+  outputs. Expects the mod checked out at the workspace root and mc-bump checked
+  out at .mc-bump (see any of the reusable workflows).
+
+outputs:
+  loader:
+    description: Mod loader name
+    value: ${{ steps.config.outputs.loader }}
+  mod_id:
+    description: Mod id, as the loader announces it
+    value: ${{ steps.config.outputs.mod_id }}
+  ci:
+    description: Is the CI pipeline enabled
+    value: ${{ steps.config.outputs.ci }}
+  auto_update:
+    description: Is the auto-update pipeline enabled
+    value: ${{ steps.config.outputs.auto_update }}
+  release:
+    description: Is the release pipeline enabled
+    value: ${{ steps.config.outputs.release }}
+  unit_tests:
+    description: Are unit tests enabled
+    value: ${{ steps.config.outputs.unit_tests }}
+  gametest:
+    description: Is the client gametest enabled
+    value: ${{ steps.config.outputs.gametest }}
+  gametest_blocking:
+    description: Does a failing gametest fail the run
+    value: ${{ steps.config.outputs.gametest_blocking }}
+  client_gametest_task:
+    description: Gradle task running the client gametest
+    value: ${{ steps.config.outputs.client_gametest_task }}
+  unit_source:
+    description: Directory holding the unit tests
+    value: ${{ steps.config.outputs.unit_source }}
+  unit_task:
+    description: Gradle task running the unit tests
+    value: ${{ steps.config.outputs.unit_task }}
+  unit_require_non_empty:
+    description: Should an empty unit test directory fail
+    value: ${{ steps.config.outputs.unit_require_non_empty }}
+  matrix:
+    description: Is the version matrix enabled
+    value: ${{ steps.config.outputs.matrix }}
+  matrix_parallel:
+    description: Should the matrix fan out into one job per version
+    value: ${{ steps.config.outputs.matrix_parallel }}
+  stores:
+    description: Comma separated stores to publish to
+    value: ${{ steps.config.outputs.stores }}
+  branch_prefix:
+    description: Prefix of the branches the auto-update opens
+    value: ${{ steps.config.outputs.branch_prefix }}
+  retention_days:
+    description: Artifact retention
+    value: ${{ steps.config.outputs.retention_days }}
+  assignee:
+    description: Who gets the failure issue
+    value: ${{ steps.config.outputs.assignee }}
+  label:
+    description: Label put on the failure issue
+    value: ${{ steps.config.outputs.label }}
+  on_pull_request:
+    description: Should a pull request failure open an issue
+    value: ${{ steps.config.outputs.on_pull_request }}
+  log_tail:
+    description: Log lines per collapsible block
+    value: ${{ steps.config.outputs.log_tail }}
+  java:
+    description: Java major version this Minecraft version needs
+    value: ${{ steps.gradle.outputs.java }}
+  minecraft:
+    description: Minecraft version in gradle.properties
+    value: ${{ steps.gradle.outputs.minecraft }}
+  mod_version:
+    description: mod_version in gradle.properties
+    value: ${{ steps.gradle.outputs.mod_version }}
+  tag:
+    description: Release tag for this mod_version
+    value: ${{ steps.gradle.outputs.tag }}
+  versions:
+    description: JSON array of every Minecraft version the mod claims
+    value: ${{ steps.versions.outputs.json }}
+
+runs:
+  using: composite
+  steps:
+    # The ubuntu images ship PyYAML, but an image is not a contract and a
+    # self-hosted runner is not an image. Idempotent and about a second.
+    - name: Install PyYAML
+      shell: bash
+      run: python3 -m pip install --quiet --disable-pip-version-check pyyaml
+
+    - name: Read .github/mc-bump.yml
+      id: config
+      shell: bash
+      run: PYTHONPATH=.mc-bump python3 -m lib.config --github-output >> "$GITHUB_OUTPUT"
+
+    # java_version is derived from the Minecraft version by mc-bump, so the JDK
+    # follows a Minecraft bump on its own.
+    - name: Read gradle.properties
+      id: gradle
+      shell: bash
+      run: |
+        set -euo pipefail
+        prop() { sed -n "s/^$1=//p" gradle.properties | head -n 1 | tr -d '[:space:]'; }
+
+        MOD_VERSION="$(prop mod_version)"
+        {
+          echo "java=$(prop java_version)"
+          echo "minecraft=$(prop minecraft_version)"
+          echo "mod_version=$MOD_VERSION"
+        } >> "$GITHUB_OUTPUT"
+
+        # The tag template lives in the config, so the workflow never spells "v".
+        TAG="$(PYTHONPATH=.mc-bump python3 -c "
+        from lib.config import load
+        print(load().tag_for('$MOD_VERSION'))
+        ")"
+        echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+    # The matrix fans out over this. One version per job, so three claimed
+    # versions cost one build instead of three in series.
+    - name: List the versions to test
+      id: versions
+      shell: bash
+      run: |
+        set -euo pipefail
+        python3 .mc-bump/scripts/mc-bump.py --list-test-versions > versions.txt
+        if [ ! -s versions.txt ]; then
+          echo "::error::no Minecraft version to test"
+          exit 1
+        fi
+        # jq -R -s -c: read raw lines, slurp, compact JSON array
+        JSON="$(jq -R -s -c 'split("\n") | map(select(length > 0))' versions.txt)"
+        echo "==> versions: $JSON"
+        echo "json=$JSON" >> "$GITHUB_OUTPUT"
+        rm -f versions.txt
