@@ -32,6 +32,7 @@ except ModuleNotFoundError:  # pragma: no cover - environment problem, not logic
 from .common import Failure
 from .gradle import ModPaths
 from .loaders import LOADERS, Loader, get_loader
+from .patterns import COMMENT_STYLES
 
 CONFIG_PATH = ".github/mc-bump.yml"
 
@@ -40,6 +41,29 @@ CONFIG_PATH = ".github/mc-bump.yml"
 # Schema
 # --------------------------------------------------------------------------
 @dataclass(frozen=True)
+class Record:
+    """Shape of one entry in a list of mappings.
+
+    `one_of` exists for the glob/regex pair: a pattern is written EITHER as a
+    glob under `pattern` OR as a regex under `regex`, and saying so in the schema
+    is what turns "you wrote both" into a message naming the two keys.
+    """
+
+    required: tuple[str, ...] = ()
+    optional: tuple[str, ...] = ()
+    one_of: tuple[tuple[str, ...], ...] = ()
+    choices: dict[str, tuple[str, ...]] = field(default_factory=dict)
+
+    @property
+    def known(self) -> set[str]:
+        return {
+            *self.required,
+            *self.optional,
+            *(key for group in self.one_of for key in group),
+        }
+
+
+@dataclass(frozen=True)
 class Field:
     """One leaf of the schema."""
 
@@ -47,8 +71,8 @@ class Field:
     default: object = None
     required: bool = False
     choices: tuple = ()
-    #: for lists of records: the keys each record must / may have
-    record: tuple[tuple[str, bool], ...] = ()
+    #: for lists of mappings; None means "a list of plain strings"
+    record: Record | None = None
 
     def coerce(self, path: str, value):
         if self.type is bool:
@@ -83,29 +107,54 @@ class Field:
         raise Failure(f"{path}: unsupported schema type {self.type}")  # pragma: no cover
 
     def _record(self, path: str, item):
-        if not self.record:
+        if self.record is None:
             if not isinstance(item, str) or not item.strip():
                 raise Failure(f"{path}: expected a non-empty string, got {item!r}")
             return item.strip()
         if not isinstance(item, dict):
             raise Failure(f"{path}: expected a mapping, got {item!r}")
-        known = {key for key, _ in self.record}
+
+        known = self.record.known
         for key in item:
             if key not in known:
                 raise Failure(
                     f"{path}: unknown key '{key}'. Known keys: {', '.join(sorted(known))}"
                 )
-        out = {}
-        for key, required in self.record:
+
+        def text(key):
             value = item.get(key)
             if value is None:
-                if required:
-                    raise Failure(f"{path}: '{key}' is required")
-                out[key] = ""
-                continue
+                return ""
             if not isinstance(value, str) or not value.strip():
                 raise Failure(f"{path}.{key}: expected a non-empty string, got {value!r}")
-            out[key] = value.strip()
+            return value.strip()
+
+        out = {}
+        for key in self.record.required:
+            out[key] = text(key)
+            if not out[key]:
+                raise Failure(f"{path}: '{key}' is required")
+        for key in self.record.optional:
+            out[key] = text(key)
+        for group in self.record.one_of:
+            present = [key for key in group if text(key)]
+            if not present:
+                raise Failure(
+                    f"{path}: one of {' or '.join(repr(k) for k in group)} is required"
+                )
+            if len(present) > 1:
+                raise Failure(
+                    f"{path}: {' and '.join(repr(k) for k in present)} are mutually "
+                    f"exclusive, keep one"
+                )
+            for key in group:
+                out[key] = text(key)
+
+        for key, allowed in self.record.choices.items():
+            if out.get(key) and out[key] not in allowed:
+                raise Failure(
+                    f"{path}.{key}: '{out[key]}' is not one of {', '.join(allowed)}"
+                )
         return out
 
 
@@ -144,21 +193,29 @@ SCHEMA: dict = {
         "server": {
             "boot-timeout": Field(int, default=900),
             "stop-timeout": Field(int, default=60),
+            # `pattern` is a glob, `regex` the escape hatch — see lib/patterns.py.
             "expect": Field(
                 list,
                 default=[],
-                record=(("pattern", True), ("message", False)),
+                record=Record(
+                    one_of=(("pattern", "regex"),),
+                    optional=("message",),
+                ),
             ),
             "expect-count": Field(
                 list,
                 default=[],
-                record=(
-                    ("pattern", True),
-                    ("count-source", True),
-                    ("count-pattern", True),
-                    ("message", False),
+                record=Record(
+                    one_of=(
+                        ("pattern", "regex"),
+                        ("count-pattern", "count-regex"),
+                    ),
+                    required=("count-source",),
+                    optional=("message", "comment-style"),
+                    choices={"comment-style": COMMENT_STYLES},
                 ),
             ),
+            # Globs too, added to the loader's own signatures.
             "fatal-extra": Field(list, default=[]),
         },
     },

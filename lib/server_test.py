@@ -25,6 +25,7 @@ from pathlib import Path
 from .common import Failure
 from .config import Project
 from .gradle import read_property
+from .patterns import Matcher, compile_pattern, strip_comments
 
 BOOT_DONE = re.compile(r"Done \([0-9.]+s\)")
 BOOTED_VERSION = re.compile(r"Starting minecraft server version (.+)$", re.MULTILINE)
@@ -68,17 +69,23 @@ class ServerTest:
 # --------------------------------------------------------------------------
 # The assertions — pure, and where the value of this file is
 # --------------------------------------------------------------------------
-def count_in_source(root: Path, source: str, literal: str) -> int:
-    """Lines of `source` containing `literal`, the way `grep -cF` counts them.
+def count_in_source(
+    root: Path, source: str, matcher: Matcher, comment_style: str = "c"
+) -> int:
+    """Lines of `source` matching `matcher`, comments excluded.
 
     Counting from the source rather than storing a constant is what makes the
     expectation follow the code: adding a potion updates it on its own.
+
+    Comments are stripped first, because a pattern spelled out in a docstring is
+    a mention rather than a registration. mc-bump's own fixture hit this: naming
+    the pattern in a Javadoc made the expected count read one too high.
     """
     path = root / source
     if not path.is_file():
         raise Failure(f"count-source '{source}' does not exist")
     text = path.read_text(encoding="utf-8", errors="replace")
-    return sum(1 for line in text.splitlines() if literal in line)
+    return matcher.count_lines(strip_comments(text, comment_style))
 
 
 def check_log(test: ServerTest, log_text: str, log=print) -> None:
@@ -116,52 +123,66 @@ def check_log(test: ServerTest, log_text: str, log=print) -> None:
         )
 
     # -- fatal signatures
-    # Targeted: Minecraft logs plenty of harmless WARNs. The list is the loader's
-    # own signatures plus tests.server.fatal-extra.
-    patterns = [*loader.fatal_patterns(), *server["fatal-extra"]]
+    # Targeted: Minecraft logs plenty of harmless WARNs. The loader's own
+    # signatures are regexes it owns; tests.server.fatal-extra are globs the mod
+    # writes, hence the two compilations.
+    fatal = [
+        compile_pattern(None, pattern, where="loader.fatal_patterns")
+        for pattern in loader.fatal_patterns()
+    ] + [
+        compile_pattern(pattern, None, where=f"tests.server.fatal-extra[{index}]")
+        for index, pattern in enumerate(server["fatal-extra"])
+    ]
     hits = [
         line
         for line in log_text.splitlines()
-        if any(re.search(pattern, line) for pattern in patterns)
+        if any(matcher._match(line) for matcher in fatal)
     ]
     if hits:
         detail = "\n".join(f"  {line}" for line in hits[:10])
         raise Failure(f"fatal error detected in the log:\n{detail}")
 
     # -- did the mod do its job?
-    for rule in server["expect"]:
-        if not re.search(rule["pattern"], log_text, re.MULTILINE):
+    for index, rule in enumerate(server["expect"]):
+        matcher = compile_pattern(
+            rule.get("pattern"), rule.get("regex"), where=f"tests.server.expect[{index}]"
+        )
+        if not matcher.search(log_text):
             message = rule["message"] or "expected pattern not found"
-            raise Failure(f"{message}: /{rule['pattern']}/ never appeared in the log")
-        log(f"==> Found: /{rule['pattern']}/")
+            raise Failure(f"{message}: '{matcher}' never appeared in the log")
+        log(f"==> Found: '{matcher}'")
 
-    for rule in server["expect-count"]:
+    for index, rule in enumerate(server["expect-count"]):
+        where = f"tests.server.expect-count[{index}]"
         message = rule["message"] or "count check"
+
+        in_log = compile_pattern(
+            rule.get("pattern"), rule.get("regex"), where=where, need_capture=True
+        )
+        in_source = compile_pattern(
+            rule.get("count-pattern"), rule.get("count-regex"), where=where
+        )
+
         expected_count = count_in_source(
-            project.root, rule["count-source"], rule["count-pattern"]
+            project.root,
+            rule["count-source"],
+            in_source,
+            rule.get("comment-style") or "c",
         )
         if expected_count == 0:
             raise Failure(
-                f"{message}: '{rule['count-pattern']}' never appears in "
-                f"{rule['count-source']}, so there is nothing to expect. Either the "
+                f"{message}: '{in_source}' never appears in {rule['count-source']} "
+                f"outside its comments, so there is nothing to expect. Either the "
                 f"feature was removed, or the source was rewritten and mc-bump.yml "
                 f"no longer knows how to count it."
             )
 
-        found = re.search(rule["pattern"], log_text, re.MULTILINE)
+        found = in_log.search(log_text)
         if not found:
-            raise Failure(f"{message}: the mod never reported /{rule['pattern']}/")
-        if not found.groups():
-            raise Failure(
-                f"{message}: the pattern /{rule['pattern']}/ has no capture group, "
-                f"so there is no number to compare"
-            )
+            raise Failure(f"{message}: the mod never reported '{in_log}'")
 
-        actual = found.group(1)
-        log(
-            f"==> Counted: {actual} (expected: {expected_count}) "
-            f"for /{rule['pattern']}/"
-        )
+        actual = in_log.captured(found)
+        log(f"==> Counted: {actual} (expected: {expected_count}) for '{in_log}'")
         if actual != str(expected_count):
             raise Failure(f"{message}: {actual} instead of {expected_count}")
 

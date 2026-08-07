@@ -33,9 +33,9 @@ tests:
       - pattern: "Brewing mixes registered"
         message: "the brewing callback never ran"
     expect-count:
-      - pattern: "Registered ([0-9]+) potions"
+      - pattern: "Registered <count> potions"
         count-source: src/main/java/com/spatulox/ExtendedTimePotion.java
-        count-pattern: "= registerPotion("
+        count-pattern: "*= registerPotion(*"
         message: "potion count mismatch"
 
 notify:

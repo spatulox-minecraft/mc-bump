@@ -15,6 +15,7 @@ import unittest
 from pathlib import Path
 
 from lib.common import Failure
+from lib.patterns import compile_pattern
 from lib.server_test import ServerTest, check_log, count_in_source
 
 from .helpers import ModRepoTestCase
@@ -78,7 +79,7 @@ class HappyPathTest(CheckLogTestCase):
             count_in_source(
                 self.root,
                 "src/main/java/com/spatulox/ExtendedTimePotion.java",
-                "= registerPotion(",
+                compile_pattern("*= registerPotion(*", None, where="test"),
             ),
             50,
         )
@@ -178,17 +179,34 @@ class ExpectCountTest(CheckLogTestCase):
         (self.root / "src/main/java/com/spatulox/ExtendedTimePotion.java").unlink()
         self.rejects(GOOD_LOG, "does not exist")
 
-    def test_a_pattern_without_a_capture_group_is_refused(self):
+    def test_a_glob_without_the_count_token_is_refused(self):
         """A config error that would otherwise crash deep inside the comparison."""
         self.CONFIG = self.CONFIG.replace(
-            'pattern: "Registered ([0-9]+) potions"', 'pattern: "Registered potions"'
+            'pattern: "Registered <count> potions"', 'pattern: "Registered * potions"'
         )
         self.tearDown()
         self.setUp()
-        self.rejects(
-            GOOD_LOG.replace("Registered 50 potions", "Registered potions"),
-            "no capture group",
+        self.rejects(GOOD_LOG, "<count>")
+
+    def test_a_regex_is_still_accepted(self):
+        """The escape hatch, for what a glob cannot say."""
+        self.CONFIG = self.CONFIG.replace(
+            'pattern: "Registered <count> potions"',
+            'regex: "Registered ([0-9]+) potions"',
         )
+        self.tearDown()
+        self.setUp()
+        self.test()
+
+    def test_a_registration_named_in_a_comment_is_not_counted(self):
+        """The bug this fixture hit on itself."""
+        source = self.root / "src/main/java/com/spatulox/ExtendedTimePotion.java"
+        source.write_text(
+            "// see the `= registerPotion(` calls below\n"
+            + source.read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+        self.test()  # still 50, not 51
 
 
 if __name__ == "__main__":

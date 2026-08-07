@@ -46,12 +46,14 @@ tests:
       - pattern: "Initialisation complete"
         message: "the mod initialiser never ran"
 
-    # Counted from the source, so adding a `= marker(` line moves both sides at
-    # once. MCBUMP_BREAK=count makes the log under-report by one.
+    # Globs, not regexes: <count> is where the number sits, and everything else
+    # means itself. Counted from the source with comments stripped, so declaring
+    # one more marker moves both sides at once — and naming the pattern in a
+    # Javadoc no longer inflates the expectation.
     expect-count:
-      - pattern: "Registered ([0-9]+) markers"
+      - pattern: "Registered <count> markers"
         count-source: src/main/java/com/spatulox/mcbumptest/TestMod.java
-        count-pattern: "= marker("
+        count-pattern: "*= marker(*"
         message: "marker count mismatch"
 
     fatal-extra: []

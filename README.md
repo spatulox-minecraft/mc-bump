@@ -121,6 +121,18 @@ A server that boots proves nothing about the mod: an empty registry and a
 callback that never ran both produce a perfectly healthy server. Two lists turn
 "it booted" into "it worked".
 
+Patterns are **globs**, the shell kind, translated by `fnmatch` — not regexes.
+`Registered * potions` says what it means, and `(`, `+` or `.` are literal.
+
+    *          anything, including nothing
+    ?          exactly one character
+    [abc]      one of these        [!abc]   none of these
+    <count>    a number, captured — expect-count only
+
+They are matched **unanchored and line by line**, so a pattern does not have to
+account for the timestamp and logger prefix in front of it, and cannot
+accidentally match across two lines.
+
 `expect` — a phrase that must appear in the server log:
 
 ```yaml
@@ -136,15 +148,27 @@ from the source** rather than kept as a constant to maintain in two places:
 
 ```yaml
     expect-count:
-      - pattern: "Registered ([0-9]+) potions"        # exactly one capture group
+      - pattern: "Registered <count> potions"     # <count> is where the number is
         count-source: src/main/java/com/example/MyMod.java
-        count-pattern: "= registerPotion("            # a literal, not a regex
+        count-pattern: "*= registerPotion(*"      # counted in the source
         message: "potion registry mismatch"
 ```
 
-`pattern` is an extended regex fed to `sed -nE`, so it needs exactly one capture
-group. `count-pattern` is a literal counted with `grep -cF`. Adding a potion
-updates both sides on its own.
+Adding a potion updates both sides on its own.
+
+**Comments are stripped before counting** (`//` and `/* */`, string aware, so a
+`http://` inside a literal is safe). A pattern named in a docstring is a mention,
+not a registration — mc-bump's own fixture hit exactly that. Use
+`comment-style: hash` for `#` languages, or `none` to count everything.
+
+Where a glob genuinely cannot express it, `regex:` replaces `pattern:` and
+`count-regex:` replaces `count-pattern:` — one or the other, never both:
+
+```yaml
+      - regex: "Registered ([0-9]+) (?:potions|brews)"   # one capture group
+        count-source: src/main/java/com/example/MyMod.java
+        count-regex: "=\\s*registerPotion\\("
+```
 
 ## Running it locally
 
@@ -176,7 +200,7 @@ CI steps and any habit built around them keep working.
 2. Add it to `LOADERS` in `lib/loaders/__init__.py`.
 3. Set `loader: neoforge` in a mod's config.
 
-Nothing else changes: the workflows, the shell scripts and the version arithmetic
+Nothing else changes: the workflows, the scripts and the version arithmetic
 never name a loader.
 
 ## Developing mc-bump
