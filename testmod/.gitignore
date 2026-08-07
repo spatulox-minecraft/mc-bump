@@ -1,0 +1,10 @@
+# build output and run state of the fixtures
+*/build/
+*/.gradle/
+*/run/
+*/logs/
+*/server-test*.log
+*/build-*.log
+*/test-matrix*.txt
+*/test-escalation.txt
+*/.mc-update-state.json

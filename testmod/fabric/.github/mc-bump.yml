@@ -1,0 +1,71 @@
+# mc-bump testing itself. Read by find_root() walking up from testmod/, which is
+# why this lives under testmod/.github/ rather than at the repository root — a
+# config there would make every mc-bump checkout look like a mod.
+
+loader: fabric
+
+mod:
+  id: mc-bump-testmod
+  package: com.spatulox.mcbumptest
+  metadata: src/main/resources/fabric.mod.json
+  # no mixins: the fixture has none, and the optional path must be exercised too
+
+workflows:
+  ci: true
+  auto-update: true
+  # The testmod is never published, so there is nothing to release.
+  release: false
+  unit-tests: true
+  gametest:
+    # No client gametest: it wants a real Minecraft client under xvfb, which is
+    # slow and flaky, and it would test Loom rather than mc-bump.
+    enabled: false
+    blocking: false
+
+version:
+  format: "{mc}-{mod}"
+  tag: "v{version}"
+
+tests:
+  unit:
+    source: src/test/java
+    task: test
+    require-non-empty: true
+
+  matrix:
+    enabled: true
+    parallel: true
+
+  server:
+    boot-timeout: 600
+    stop-timeout: 60
+
+    # TestMod.onInitialize() prints this last. MCBUMP_BREAK=marker withholds it,
+    # which is how the self-test proves a missing phrase is caught.
+    expect:
+      - pattern: "Initialisation complete"
+        message: "the mod initialiser never ran"
+
+    # Counted from the source, so adding a `= marker(` line moves both sides at
+    # once. MCBUMP_BREAK=count makes the log under-report by one.
+    expect-count:
+      - pattern: "Registered ([0-9]+) markers"
+        count-source: src/main/java/com/spatulox/mcbumptest/TestMod.java
+        count-pattern: "= marker("
+        message: "marker count mismatch"
+
+    fatal-extra: []
+
+release:
+  stores: []
+  branch-prefix: selftest/mc-
+  artifact-retention-days: 7
+
+notify:
+  # No assignee: a self-test failure belongs to whoever broke mc-bump, and the
+  # run is already red.
+  assignee: ""
+  label: self-test-failure
+  keep-branch: true
+  on-pull-request: false
+  log-tail: 60

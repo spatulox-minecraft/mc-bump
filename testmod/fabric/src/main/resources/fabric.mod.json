@@ -1,0 +1,26 @@
+{
+	"schemaVersion": 1,
+	"id": "mc-bump-testmod",
+	"version": "${version}",
+	"name": "mc-bump test mod",
+	"description": "Fixture used by mc-bump to test itself. Not published anywhere.",
+	"authors": [
+		"Spatulox"
+	],
+	"contact": {
+		"sources": "https://github.com/spatulox-minecraft/mc-bump"
+	},
+	"license": "CC0-1.0",
+	"environment": "*",
+	"entrypoints": {
+		"main": [
+			"com.spatulox.mcbumptest.TestMod"
+		]
+	},
+	"depends": {
+		"fabricloader": ">=0.18.4",
+		"minecraft": "=26.2",
+		"java": ">=25",
+		"fabric-api": "*"
+	}
+}
