@@ -7,7 +7,6 @@ and by name.
 
 from __future__ import annotations
 
-import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -133,81 +132,6 @@ class ValidationTest(unittest.TestCase):
 
 
 class ExportTest(ModRepoTestCase):
-    def test_bash_really_evaluates_the_exports(self):
-        """The contract is `eval`, so the test evals.
-
-        Patterns are full of quotes, brackets and backslashes; asserting on the
-        rendered string would prove nothing about what a shell does with it.
-        """
-        script = (
-            f"{config_module.export_shell(self.project)}\n"
-            'printf "%s\\n" "$MCBUMP_MOD_ID" "$MCBUMP_MOD_LOADED_PATTERN" '
-            '"$MCBUMP_FATAL_PATTERNS" "$MCBUMP_TESTS_SERVER_EXPECT"\n'
-        )
-        out = subprocess.run(
-            ["bash", "-c", script], capture_output=True, text=True, check=True
-        ).stdout.splitlines()
-
-        self.assertEqual(out[0], "extended-time-potion")
-        self.assertIn("extended-time-potion", out[1])
-        self.assertIn("Mixin apply failed", out[2])
-        self.assertEqual(
-            out[3], "Brewing mixes registered\tthe brewing callback never ran"
-        )
-
-    def test_a_shell_loop_reads_the_records_back(self):
-        """Exactly the loop headless-server-test.sh runs."""
-        script = (
-            f"{config_module.export_shell(self.project)}\n"
-            'while IFS=$\'\\t\' read -r pattern source count message; do\n'
-            '  printf "[%s][%s][%s][%s]\\n" "$pattern" "$source" "$count" "$message"\n'
-            "done <<< \"$MCBUMP_TESTS_SERVER_EXPECT_COUNT\"\n"
-        )
-        out = subprocess.run(
-            ["bash", "-c", script], capture_output=True, text=True, check=True
-        ).stdout.strip()
-        self.assertEqual(
-            out,
-            "[Registered ([0-9]+) potions]"
-            "[src/main/java/com/spatulox/ExtendedTimePotion.java]"
-            "[= registerPotion(]"
-            "[potion count mismatch]",
-        )
-
-    def test_booleans_become_shell_words(self):
-        exports = config_module.export_shell(self.project)
-        self.assertIn("MCBUMP_WORKFLOWS_CI=true", exports)
-        self.assertIn("MCBUMP_WORKFLOWS_GAMETEST_ENABLED=false", exports)
-
-    def test_the_loader_contributes_what_the_shell_cannot_derive(self):
-        exports = config_module.export_shell(self.project)
-        self.assertIn("MCBUMP_SERVER_TASK=runServer", exports)
-        self.assertIn("MCBUMP_STORE_LOADER=fabric", exports)
-        self.assertIn("MCBUMP_MOD_LOADED_PATTERN=", exports)
-        self.assertIn("MCBUMP_FATAL_PATTERNS=", exports)
-
-    def test_fatal_patterns_merge_the_loader_and_the_config(self):
-        self.CONFIG = CONFIG.replace(
-            "    expect:", '    fatal-extra: ["Custom explosion"]\n    expect:'
-        )
-        self.tearDown()  # the workspace setUp built with the default config
-        self.setUp()
-        exports = config_module.export_shell(self.project)
-        line = next(
-            line for line in exports.splitlines() if line.startswith("MCBUMP_FATAL_PATTERNS=")
-        )
-        self.assertIn("Mixin apply failed", line)
-        self.assertIn("Custom explosion", line)
-
-    def test_records_are_tab_separated_one_per_line(self):
-        value = config_module._shell_value(
-            self.project.raw["tests"]["server"]["expect-count"]
-        )
-        fields = value.split("\n")[0].split("\t")
-        self.assertEqual(len(fields), 4)
-        self.assertEqual(fields[0], "Registered ([0-9]+) potions")
-        self.assertEqual(fields[2], "= registerPotion(")
-
     def test_github_output_is_flat_key_value(self):
         lines = config_module.export_github_output(self.project).splitlines()
         pairs = dict(line.split("=", 1) for line in lines)

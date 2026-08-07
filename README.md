@@ -55,7 +55,7 @@ For a pipeline of your own, the scripts are also exposed as a composite action:
 ```yaml
 - uses: spatulox-minecraft/mc-bump@v1
   with:
-    command: test-matrix.sh
+    command: test-matrix.py
 ```
 
 ## Configuration
@@ -156,15 +156,18 @@ MCB=../mc-bump
 python3 $MCB/scripts/mc-bump.py --list-test-versions   # what the matrix will boot
 python3 $MCB/scripts/mc-bump.py 26.2 --dry-run         # what an update would change
 
-bash $MCB/scripts/headless-server-test.sh              # one server
-bash $MCB/scripts/test-matrix.sh                       # every claimed version
-bash $MCB/scripts/test-with-escalation.sh              # ... plus the ladder
+python3 $MCB/scripts/headless-server-test.py           # one server
+python3 $MCB/scripts/test-matrix.py                    # every claimed version
+python3 $MCB/scripts/test-with-escalation.py           # ... plus the ladder
 
-MC_VERSIONS="26.1" bash $MCB/scripts/test-matrix.sh    # restrict the matrix
+python3 $MCB/scripts/test-matrix.py --minecraft 26.1   # restrict the matrix
 PYTHONPATH=$MCB python3 -m lib.config --json           # the resolved config
 ```
 
-Requires `python3` and `pyyaml`.
+Requires `python3` and `pyyaml`, and nothing else — no `bash`, no `jq`, no
+`shellcheck`. The environment variables the shell version took (`MC_VERSIONS`,
+`BOOT_TIMEOUT`, `LOG`, `GRADLE_ARGS`, `EXPECTED_MC`…) are still honoured, so the
+CI steps and any habit built around them keep working.
 
 ## Adding a loader
 
@@ -187,3 +190,9 @@ deliberately untested — they describe the shape of upstream APIs, which no loc
 assertion can pin down. What is tested is the decision layer, because a mistake
 there does not crash. It produces a green matrix, a jar a player's loader
 refuses, or a store page announcing a version nobody ever booted.
+
+Everything is Python, including the scripts that used to be shell. The split that
+matters is inside each of them: `check_log()` and the matrix bookkeeping are pure
+functions over strings, so `tests/test_server_test.py` covers what the log has to
+say without booting a single server — which is exactly what could not be tested
+while it was a pile of `grep` and `sed`.

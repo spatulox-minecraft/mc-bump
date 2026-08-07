@@ -53,21 +53,28 @@ jobs:
           print(f"{len(blocks)} config example(s) validated")
           PY
 
-  shell:
-    name: shellcheck
+  entry-points:
+    name: Entry points
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - name: Install shellcheck
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: python3 -m pip install --quiet --disable-pip-version-check pyyaml
+
+      # There is no shellcheck job any more: the scripts are Python. What replaces
+      # it is checking that each entry point still parses its arguments and prints
+      # its help — the one thing a syntax error or a bad import breaks first, and
+      # the one thing the unit tests never exercise because they import lib/
+      # directly.
+      - name: Every script answers --help
         run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq shellcheck
-      # No --severity filter: the scripts are clean at every level, and the day
-      # they are not is the day to decide, not to discover.
-      # -x -P: follow `source lib.sh`, so the shared file is checked in context
-      # rather than reported as unreadable.
-      - name: Lint the scripts
-        run: shellcheck -x -P scripts scripts/*.sh
+          set -euo pipefail
+          for script in scripts/*.py; do
+            echo "==> $script"
+            python3 "$script" --help > /dev/null
+          done
 
   actions:
     name: actionlint

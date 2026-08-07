@@ -186,7 +186,7 @@ jobs:
           LOG: server-test-${{ matrix.minecraft }}.log
           EXPECTED_MC: ${{ matrix.minecraft }}
           GRADLE_ARGS: -Pminecraft_version=${{ matrix.minecraft }}
-        run: bash .mc-bump/scripts/headless-server-test.sh
+        run: python3 .mc-bump/scripts/headless-server-test.py
 
       # One report per job, and the kind says which half broke: a build failure
       # explains a server failure, so the issue lists them in that order.

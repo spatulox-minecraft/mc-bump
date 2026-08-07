@@ -1,9 +1,9 @@
 """Read, validate and export .github/mc-bump.yml.
 
 One file describes a mod to mc-bump, and this module is the only thing that
-parses it. It is read by the python CLI AND by the shell scripts (through
-`--sh`), so a value can never mean two different things depending on which side
-of the pipeline reads it.
+parses it. Everything else — the CLI, the server test, the matrix — reads a
+Project rather than re-deriving anything, so a value can never mean two
+different things depending on which part of the pipeline looks at it.
 
 Validation is strict and names the offending key: a config that is wrong in a
 subtle way produces a green pipeline testing the wrong thing, which is the exact
@@ -15,7 +15,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shlex
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -298,61 +297,6 @@ def load(root: Path | None = None) -> Project:
 # --------------------------------------------------------------------------
 # Export
 # --------------------------------------------------------------------------
-def _flatten(node: dict, prefix: str = "") -> dict[str, object]:
-    out: dict[str, object] = {}
-    for key, value in node.items():
-        name = f"{prefix}{key}".replace("-", "_").replace(".", "_").upper()
-        if isinstance(value, dict):
-            out.update(_flatten(value, prefix=f"{prefix}{key}."))
-        else:
-            out[name] = value
-    return out
-
-
-def _shell_value(value) -> str:
-    """Render one config value for `eval`.
-
-    Records become TAB separated fields, one per line, so a shell loop reads them
-    with `while IFS=$'\\t' read -r ...`. Patterns are line oriented by nature
-    (they are fed to grep), so newline is a safe record separator and TAB is a
-    safe field separator.
-    """
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if value is None:
-        return ""
-    if isinstance(value, list):
-        rows = []
-        for item in value:
-            if isinstance(item, dict):
-                rows.append("\t".join(item.values()))
-            else:
-                rows.append(str(item))
-        return "\n".join(rows)
-    return str(value)
-
-
-def export_shell(project: Project) -> str:
-    """`eval "$(python3 -m lib.config --sh)"` in the shell scripts."""
-    values = _flatten(project.raw)
-    values["MOD_ROOT"] = str(project.root)
-    values["SERVER_TASK"] = project.loader.server_task()
-    values["CLIENT_GAMETEST_TASK"] = project.loader.client_gametest_task()
-    values["MOD_LOADED_PATTERN"] = project.loader.mod_loaded_pattern(project.mod_id)
-    values["STORE_LOADER"] = project.loader.store_loader_name()
-    # The loader's own signatures plus whatever the mod adds, already joined into
-    # the alternation `grep -E` expects: assembling it here keeps the shell from
-    # having to know that these two lists are the same kind of thing.
-    values["FATAL_PATTERNS"] = "|".join(
-        [*project.loader.fatal_patterns(), *project.raw["tests"]["server"]["fatal-extra"]]
-    )
-
-    lines = []
-    for key in sorted(values):
-        lines.append(f"MCBUMP_{key}={shlex.quote(_shell_value(values[key]))}")
-    return "\n".join(lines)
-
-
 def export_json(project: Project) -> str:
     document = dict(project.raw)
     document["root"] = str(project.root)
@@ -401,8 +345,9 @@ def main(argv: list[str] | None = None) -> int:
         description=f"Read and validate {CONFIG_PATH}.",
     )
     group = parser.add_mutually_exclusive_group()
-    group.add_argument("--sh", action="store_true", help="shell exports, for eval")
-    group.add_argument("--json", action="store_true", help="the whole resolved config")
+    group.add_argument(
+        "--json", action="store_true", default=True, help="the whole resolved config"
+    )
     group.add_argument(
         "--github-output",
         action="store_true",
@@ -413,12 +358,10 @@ def main(argv: list[str] | None = None) -> int:
 
     project = load(Path(args.root) if args.root else None)
 
-    if args.json:
-        print(export_json(project))
-    elif args.github_output:
+    if args.github_output:
         print(export_github_output(project))
     else:
-        print(export_shell(project))
+        print(export_json(project))
     return 0
 
 

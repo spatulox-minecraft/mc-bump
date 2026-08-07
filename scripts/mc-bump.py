@@ -28,7 +28,7 @@ Examples
     # after a FAILED matrix: restore the previous compatibility claims
     python3 mc-bump.py --revert-compat
 
-    # escalation steps, driven by test-with-escalation.sh
+    # escalation steps, driven by test-with-escalation.py
     python3 mc-bump.py --bump-api
     python3 mc-bump.py --bump-loader
 
@@ -45,7 +45,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import subprocess
 import sys
 from pathlib import Path
 
@@ -55,10 +54,10 @@ from lib import config as config_module  # noqa: E402
 from lib import update as update_module  # noqa: E402
 from lib.common import Failure  # noqa: E402
 from lib.gradle import read_property  # noqa: E402
+from lib.matrix import run_with_escalation  # noqa: E402
 from lib.versions import latest_minecraft_release, java_version_for, series_of  # noqa: E402
 
-HERE = Path(__file__).resolve().parent
-ESCALATION_LADDER = HERE / "test-with-escalation.sh"
+ESCALATION_LADDER = "scripts/test-with-escalation.py"
 
 
 def emit_github_output(result: dict) -> None:
@@ -74,22 +73,21 @@ def emit_github_output(result: dict) -> None:
             handle.write(f"{key}={'' if value is None else value}\n")
 
 
-def run_tests(log) -> str | None:
+def run_tests(project, log) -> str | None:
     """Run the same ladder as CI. Returns the failed step, or None.
 
-    Delegates to test-with-escalation.sh rather than to the matrix directly, so
-    local and CI run strictly the same sequence: a full matrix over every claimed
-    version, then an API bump and another full matrix, then a loader bump and a
-    third one. Duplicating that ladder here would be a second place for it to
-    drift.
+    Calls run_with_escalation() directly rather than shelling out to the entry
+    point script, so local and CI run strictly the same code: a full matrix over
+    every claimed version, then an API bump and another full matrix, then a loader
+    bump and a third one. When the ladder lived in bash this had to be a
+    subprocess, and its exit code was all we could learn from it.
     """
-    command = ["bash", str(ESCALATION_LADDER)]
-    log(f"\n==> version matrix with escalation: {' '.join(command)}")
-    try:
-        completed = subprocess.run(command, check=False)
-    except OSError as exc:
-        raise Failure(f"cannot run '{command[0]}': {exc}") from exc
-    return None if completed.returncode == 0 else "version matrix (escalation exhausted)"
+    log("\n==> version matrix with escalation")
+    result, _ = run_with_escalation(project)
+    if result.ok:
+        return None
+    broken = ", ".join(f"{o.minecraft} ({o.outcome})" for o in result.failed)
+    return f"version matrix, escalation exhausted: {broken}"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -140,7 +138,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--list-test-versions",
         action="store_true",
         help="print, one per line, every Minecraft version the mod claims and that "
-        "must therefore be booted. Used by test-matrix.sh.",
+        "must therefore be booted. Used by test-matrix.py.",
     )
     parser.add_argument(
         "--revert-compat",
@@ -372,7 +370,7 @@ def main() -> int:
             f"\n  /!\\ Minecraft {target} is NOT marked as compatible yet.\n"
             f"      Nothing proves the mod works at this point. Run the matrix,\n"
             f"      which escalates the frozen dependencies if it has to:\n"
-            f"        bash {ESCALATION_LADDER}\n"
+            f"        python3 {ESCALATION_LADDER}\n"
             f"      then, if it passes:\n"
             f"        python3 mc-bump.py --mark-supported\n"
             f"      If it fails:\n"
@@ -387,7 +385,7 @@ def main() -> int:
         log("\nNothing to change.")
 
     if args.run_tests:
-        failed = run_tests(log)
+        failed = run_tests(project, log)
         if failed:
             # Read back what the escalation left in gradle.properties, since those
             # bumps are kept.

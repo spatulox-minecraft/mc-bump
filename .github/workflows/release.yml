@@ -191,7 +191,7 @@ jobs:
           LOG: server-test-${{ matrix.minecraft }}.log
           EXPECTED_MC: ${{ matrix.minecraft }}
           GRADLE_ARGS: -Pminecraft_version=${{ matrix.minecraft }}
-        run: bash .mc-bump/scripts/headless-server-test.sh
+        run: python3 .mc-bump/scripts/headless-server-test.py
 
       - name: Assemble the log to report
         if: always()

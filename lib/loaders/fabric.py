@@ -180,8 +180,10 @@ class FabricLoader(Loader):
     def mod_loaded_pattern(self, mod_id: str) -> str:
         """The loader's own inventory line, not any mention of the id.
 
-        POSIX ERE, consumed by `grep -E` in headless-server-test.sh — hence the
-        bracket expressions rather than \\s.
+        A Python regex, matched line by line against the log. It used to be a
+        POSIX ERE with `[[:space:]]`, for `grep -E`; the module `re` does not know
+        that class, so the scripts moving to Python would have silently matched
+        nothing.
 
         Fabric Loader prints the mods it LOADED as an indented tree:
 
@@ -194,7 +196,7 @@ class FabricLoader(Loader):
         a bare grep matched.
 
         No escaping: the Fabric spec restricts a mod id to [a-z0-9_-], none of
-        which is an ERE metacharacter, and MOD_ID_RE rejects anything else rather
+        which is a regex metacharacter, and MOD_ID_RE rejects anything else rather
         than building a pattern out of unvalidated input.
         """
         if not MOD_ID_RE.fullmatch(mod_id):
@@ -202,7 +204,7 @@ class FabricLoader(Loader):
                 f"mod.id = '{mod_id}' is not a valid Fabric mod id "
                 f"(lowercase letters, digits, '-' and '_', 2 to 64 characters)"
             )
-        return rf"^[[:space:]]*-[[:space:]]+{mod_id}[[:space:]]"
+        return rf"^\s*-\s+{mod_id}\s"
 
     def fatal_patterns(self) -> list[str]:
         return [
