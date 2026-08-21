@@ -1,5 +1,8 @@
 # mc-bump
 
+> This is a school project where we needed to entirely code the project with AI while deciding the architecture, functionality and more..
+> At one point of the project, it might be humanly rework if I have time, patience and determination
+
 Reusable CI for Minecraft mods: follow a new Minecraft release, prove the mod
 still works on **every version it claims**, and publish it — driven by one config
 file in the mod's repository.
