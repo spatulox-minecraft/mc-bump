@@ -11,12 +11,24 @@ that used to satisfy the old `grep 'extended-time-potion'`.
 
 from __future__ import annotations
 
+import os
+import shlex
+import signal
+import time
 import unittest
 from pathlib import Path
 
 from lib.common import Failure
 from lib.patterns import compile_pattern
-from lib.server_test import ServerTest, check_log, count_in_source
+from lib.server_test import (
+    ServerTest,
+    _living,
+    _process_tree,
+    _signal,
+    _terminate,
+    check_log,
+    count_in_source,
+)
 
 from .helpers import ModRepoTestCase
 
@@ -207,6 +219,75 @@ class ExpectCountTest(CheckLogTestCase):
             encoding="utf-8",
         )
         self.test()  # still 50, not 51
+
+
+# --------------------------------------------------------------------------
+# The teardown, which is not pure and still has to be tested
+# --------------------------------------------------------------------------
+DETACHED = (
+    "import os, sys, time; os.setsid(); "
+    "open(sys.argv[1], 'w').write(str(os.getpid())); time.sleep(300)"
+)
+
+
+class TerminateTest(unittest.TestCase):
+    """A detached grandchild is the shape that matters.
+
+    This is what gradle does to its build JVM, and why signalling our own process
+    group left the Minecraft server running: setsid() moves it out of our session
+    and out of our process group, but NOT out of the parent chain.
+    """
+
+    def test_a_detached_grandchild_is_killed_too(self):
+        import subprocess
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            marker = Path(tmp) / "pid"
+            process = subprocess.Popen(
+                [
+                    "bash",
+                    "-c",
+                    f'python3 -c {shlex.quote(DETACHED)} {shlex.quote(str(marker))} '
+                    f"& sleep 300",
+                ],
+                start_new_session=True,
+            )
+            try:
+                deadline = time.monotonic() + 30
+                while time.monotonic() < deadline and not marker.is_file():
+                    time.sleep(0.1)
+                self.assertTrue(marker.is_file(), "the grandchild never started")
+                grandchild = int(marker.read_text().strip())
+
+                # It really is unreachable the old way: a different session and a
+                # different group. Without this the test could pass by accident.
+                self.assertNotEqual(os.getsid(grandchild), os.getsid(process.pid))
+                self.assertNotEqual(os.getpgid(grandchild), os.getpgid(process.pid))
+
+                _terminate(process)
+
+                self.assertEqual(
+                    _living([grandchild]),
+                    [],
+                    "the detached grandchild outlived _terminate",
+                )
+            finally:
+                _signal([process.pid], signal.SIGKILL)
+                process.wait(timeout=15)
+                if marker.is_file():
+                    _signal([int(marker.read_text().strip() or 0)], signal.SIGKILL)
+
+    def test_the_tree_holds_the_child_before_anything_is_killed(self):
+        import subprocess
+
+        process = subprocess.Popen(["bash", "-c", "sleep 300"], start_new_session=True)
+        try:
+            tree = _process_tree(process.pid)
+            self.assertIn(process.pid, tree)
+            self.assertEqual(tree[0], process.pid, "the parent must come first")
+        finally:
+            _terminate(process)
 
 
 if __name__ == "__main__":
