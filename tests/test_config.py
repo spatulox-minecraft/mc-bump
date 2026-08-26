@@ -125,6 +125,29 @@ class ValidationTest(unittest.TestCase):
             CONFIG + "\nrelease:\n  stores: [modrinth, itch]\n", "itch", "modrinth"
         )
 
+    def test_a_multiline_value_is_refused_by_name(self):
+        """A block scalar here used to inject a second line into $GITHUB_OUTPUT,
+        where GitHub keeps the last occurrence of a key: `notify.label` could
+        rewrite `ci` and the pipeline branched on the forged value."""
+        self._rejects(
+            CONFIG.replace(
+                "  assignee: Spatulox\n",
+                "  assignee: Spatulox\n  label: |-\n    boom\n    ci=true\n",
+            ),
+            "notify.label",
+            "single line",
+        )
+
+    def test_a_multiline_value_inside_a_record_is_refused_too(self):
+        self._rejects(
+            CONFIG.replace(
+                '        message: "the brewing callback never ran"',
+                "        message: |-\n          boom\n          ci=true",
+            ),
+            "message",
+            "single line",
+        )
+
     def test_an_invalid_mod_id_is_caught_at_load_time(self):
         """The id becomes a grep pattern; a bad one makes the server test prove
         nothing rather than fail loudly."""
