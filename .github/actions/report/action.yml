@@ -16,7 +16,11 @@ inputs:
     description: build | server | unit | gametest — drives the severity ordering
     required: true
   outcome:
-    description: The job step's outcome, usually ${{ steps.<id>.outcome }}
+    # Written without the ${{ }} braces on purpose: the runner evaluates every
+    # string in a manifest, descriptions included, and `steps` is not a context
+    # an action can read. Spelling the example out made the whole file fail to
+    # load — "Unrecognized named-value: 'steps'" — before any step ran.
+    description: The calling job's step outcome, usually steps.<id>.outcome
     required: true
   note:
     description: Qualifier shown next to the icon in the table, e.g. "non blocking"
