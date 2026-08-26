@@ -87,3 +87,120 @@ jobs:
           bash <(curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
       - name: Lint the workflows
         run: ./actionlint -color
+
+  # The fixture mod exists so mc-bump can prove itself without another
+  # repository, but a fixture no workflow runs proves nothing. This job walks the
+  # whole chain — build, boot, check_log, report — and then breaks the mod on
+  # purpose, because a check_log that never says no is indistinguishable from one
+  # that always says yes.
+  fixture:
+    name: Fixture mod (build → boot → check_log → report)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+
+      # testmod/fabric carries its own gradle.properties, so the JDK follows the
+      # fixture rather than being pinned here and drifting from it.
+      - name: Read the fixture's Java version
+        id: java
+        run: |
+          set -euo pipefail
+          VERSION="$(sed -n 's/^java_version=//p' testmod/fabric/gradle.properties \
+            | head -n 1 | tr -d '[:space:]')"
+          if [ -z "$VERSION" ]; then
+            echo "::error::no java_version in testmod/fabric/gradle.properties"
+            exit 1
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: ${{ steps.java.outputs.version }}
+      - uses: gradle/actions/setup-gradle@v5
+
+      - run: python3 -m pip install --quiet --disable-pip-version-check pyyaml
+
+      # `build` runs the fixture's own unit tests too, which is what exercises
+      # tests.unit and require-non-empty.
+      - name: Build the fixture
+        working-directory: testmod/fabric
+        run: |
+          set -euo pipefail
+          chmod +x gradlew
+          ./gradlew build --stacktrace --console=plain 2>&1 | tee build.log
+
+      # No continue-on-error: a healthy fixture that cannot boot is the failure
+      # this job exists to catch.
+      - name: A healthy fixture boots and passes check_log
+        env:
+          MOD_ROOT: testmod/fabric
+          LOG: server-test-green.log
+        run: python3 scripts/headless-server-test.py
+
+      # The other direction, and the one an unrun fixture never proves. Two
+      # assertions per scenario: a non-zero exit alone would let a Gradle or
+      # network failure read as "the detection works".
+      - name: check_log catches a deliberately broken fixture
+        env:
+          MOD_ROOT: testmod/fabric
+        run: |
+          set -uo pipefail
+          fail() { echo "::error::$1"; cat "$OUT"; exit 1; }
+          for scenario in "marker:the mod initialiser never ran" \
+                          "count:marker count mismatch: 2 instead of 3"; do
+            MODE="${scenario%%:*}"
+            EXPECTED="${scenario#*:}"
+            OUT="break-$MODE.out"
+            if MCBUMP_BREAK="$MODE" LOG="server-test-break-$MODE.log" \
+               python3 scripts/headless-server-test.py > "$OUT" 2>&1; then
+              fail "MCBUMP_BREAK=$MODE booted green — check_log no longer catches it"
+            fi
+            if ! grep -qF "$EXPECTED" "$OUT"; then
+              fail "MCBUMP_BREAK=$MODE failed, but not for the expected reason"
+            fi
+            echo "==> $MODE: caught — '$EXPECTED'"
+          done
+
+      # The last link, over the real composite rather than a hand-written
+      # meta.json that would drift from the schema it copies. break-marker.out
+      # rather than the raw server log: check_log's verdict is what the script
+      # prints, and the verdict is the half a reader needs.
+      - name: Report the caught failure
+        uses: ./.github/actions/report
+        with:
+          name: fixture-marker
+          title: Fixture — withheld marker
+          kind: server
+          outcome: failure
+          log: break-marker.out
+          upload: false
+
+      # A tail large enough to hold the whole run: the point is that the reason
+      # travels from check_log to the issue body, not how far the default trims.
+      - name: The issue body carries the reason, not just a red mark
+        run: |
+          set -euo pipefail
+          python3 -m lib.report --failure-issue --reports-dir mc-bump-reports \
+            --workflow "$GITHUB_WORKFLOW" --ref "$GITHUB_REF_NAME" \
+            --log-tail 400 --out issue-body.md
+          if ! grep -qF "the mod initialiser never ran" issue-body.md; then
+            echo "::error::the failure never reached the issue body"
+            cat issue-body.md
+            exit 1
+          fi
+
+      - name: Upload the fixture logs
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fixture-logs
+          path: |
+            testmod/fabric/build.log
+            testmod/fabric/server-test-*.log
+            testmod/fabric/run/logs/
+            break-*.out
+            issue-body.md
+          retention-days: 7
+          if-no-files-found: ignore

@@ -53,6 +53,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from lib import config as config_module  # noqa: E402
 from lib import update as update_module  # noqa: E402
 from lib.common import Failure  # noqa: E402
+from lib.github import output as github_output  # noqa: E402
 from lib.gradle import read_property  # noqa: E402
 from lib.matrix import run_with_escalation  # noqa: E402
 from lib.versions import latest_minecraft_release, java_version_for, series_of  # noqa: E402
@@ -65,12 +66,7 @@ def emit_github_output(result: dict) -> None:
     if not path:
         return
     with open(path, "a", encoding="utf-8") as handle:
-        for key, value in result.items():
-            if isinstance(value, list):
-                value = ",".join(value)
-            if isinstance(value, bool):
-                value = str(value).lower()
-            handle.write(f"{key}={'' if value is None else value}\n")
+        handle.write(github_output(result) + "\n")
 
 
 def run_tests(project, log) -> str | None:

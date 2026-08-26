@@ -30,6 +30,7 @@ except ModuleNotFoundError:  # pragma: no cover - environment problem, not logic
     raise SystemExit(1)
 
 from .common import Failure
+from .github import output as github_output
 from .gradle import ModPaths
 from .loaders import LOADERS, Loader, get_loader
 from .patterns import COMMENT_STYLES
@@ -61,6 +62,21 @@ class Record:
             *self.optional,
             *(key for group in self.one_of for key in group),
         }
+
+
+def _single_line(path: str, value: str) -> str:
+    """Reject an embedded newline.
+
+    Not a style rule: every string here can end up in $GITHUB_OUTPUT, where a
+    newline opens a SECOND `key=value` line. Since GitHub keeps the last
+    occurrence of a key, a `notify.label` spelled as a block scalar could
+    rewrite `ci` or `release` and branch the pipeline on a forged value. The
+    emitter quotes such values (see lib/github.py); this refuses them at the
+    source, where the error can still name the key.
+    """
+    if "\n" in value or "\r" in value:
+        raise Failure(f"{path}: expected a single line")
+    return value
 
 
 @dataclass(frozen=True)
@@ -95,6 +111,7 @@ class Field:
                 if self.required or self.default != "":
                     raise Failure(f"{path}: expected a non-empty string")
                 return ""
+            _single_line(path, value)
             if self.choices and value not in self.choices:
                 raise Failure(
                     f"{path}: '{value}' is not one of {', '.join(self.choices)}"
@@ -110,7 +127,7 @@ class Field:
         if self.record is None:
             if not isinstance(item, str) or not item.strip():
                 raise Failure(f"{path}: expected a non-empty string, got {item!r}")
-            return item.strip()
+            return _single_line(path, item.strip())
         if not isinstance(item, dict):
             raise Failure(f"{path}: expected a mapping, got {item!r}")
 
@@ -127,7 +144,7 @@ class Field:
                 return ""
             if not isinstance(value, str) or not value.strip():
                 raise Failure(f"{path}.{key}: expected a non-empty string, got {value!r}")
-            return value.strip()
+            return _single_line(f"{path}.{key}", value.strip())
 
         out = {}
         for key in self.record.required:
@@ -381,7 +398,7 @@ def export_github_output(project: Project) -> str:
         "unit_require_non_empty": raw["tests"]["unit"]["require-non-empty"],
         "matrix": raw["tests"]["matrix"]["enabled"],
         "matrix_parallel": raw["tests"]["matrix"]["parallel"],
-        "stores": ",".join(raw["release"]["stores"]),
+        "stores": raw["release"]["stores"],
         "branch_prefix": raw["release"]["branch-prefix"],
         "retention_days": raw["release"]["artifact-retention-days"],
         "assignee": raw["notify"]["assignee"],
@@ -390,10 +407,7 @@ def export_github_output(project: Project) -> str:
         "log_tail": raw["notify"]["log-tail"],
         "client_gametest_task": project.loader.client_gametest_task(),
     }
-    return "\n".join(
-        f"{key}={'true' if value is True else 'false' if value is False else value}"
-        for key, value in pairs.items()
-    )
+    return github_output(pairs)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -410,6 +424,12 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="key=value lines for $GITHUB_OUTPUT",
     )
+    # A flag rather than a `python3 -c` in the workflow: the version came from
+    # gradle.properties, and pasting it into a Python literal through the shell
+    # made a quote break the run and a crafted value run on the runner.
+    group.add_argument(
+        "--tag", metavar="VERSION", help="release tag for this mod_version"
+    )
     parser.add_argument("--root", help="mod repository (default: walk up from the cwd)")
     args = parser.parse_args(argv)
 
@@ -417,6 +437,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.github_output:
         print(export_github_output(project))
+    elif args.tag:
+        print(project.tag_for(args.tag))
     else:
         print(export_json(project))
     return 0

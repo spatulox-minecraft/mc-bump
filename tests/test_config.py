@@ -7,6 +7,8 @@ and by name.
 
 from __future__ import annotations
 
+import contextlib
+import io
 import tempfile
 import unittest
 from pathlib import Path
@@ -125,6 +127,29 @@ class ValidationTest(unittest.TestCase):
             CONFIG + "\nrelease:\n  stores: [modrinth, itch]\n", "itch", "modrinth"
         )
 
+    def test_a_multiline_value_is_refused_by_name(self):
+        """A block scalar here used to inject a second line into $GITHUB_OUTPUT,
+        where GitHub keeps the last occurrence of a key: `notify.label` could
+        rewrite `ci` and the pipeline branched on the forged value."""
+        self._rejects(
+            CONFIG.replace(
+                "  assignee: Spatulox\n",
+                "  assignee: Spatulox\n  label: |-\n    boom\n    ci=true\n",
+            ),
+            "notify.label",
+            "single line",
+        )
+
+    def test_a_multiline_value_inside_a_record_is_refused_too(self):
+        self._rejects(
+            CONFIG.replace(
+                '        message: "the brewing callback never ran"',
+                "        message: |-\n          boom\n          ci=true",
+            ),
+            "message",
+            "single line",
+        )
+
     def test_an_invalid_mod_id_is_caught_at_load_time(self):
         """The id becomes a grep pattern; a bad one makes the server test prove
         nothing rather than fail loudly."""
@@ -140,6 +165,22 @@ class ExportTest(ModRepoTestCase):
         self.assertEqual(pairs["gametest"], "false")
         self.assertEqual(pairs["stores"], "modrinth,curseforge")
         self.assertEqual(pairs["assignee"], "Spatulox")
+
+
+class TagCliTest(ModRepoTestCase):
+    def test_the_tag_flag_renders_the_configured_template(self):
+        """The workflow calls this instead of building a Python literal around a
+        value read from gradle.properties."""
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            config_module.main(["--tag", "26.2-1.1.0", "--root", str(self.root)])
+        self.assertEqual(buffer.getvalue().strip(), "v26.2-1.1.0")
+
+    def test_a_quote_in_the_version_is_data_not_code(self):
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            config_module.main(["--tag", "1.0'+x+'", "--root", str(self.root)])
+        self.assertEqual(buffer.getvalue().strip(), "v1.0'+x+'")
 
 
 if __name__ == "__main__":

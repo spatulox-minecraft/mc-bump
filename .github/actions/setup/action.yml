@@ -115,10 +115,9 @@ runs:
         } >> "$GITHUB_OUTPUT"
 
         # The tag template lives in the config, so the workflow never spells "v".
-        TAG="$(PYTHONPATH=.mc-bump python3 -c "
-        from lib.config import load
-        print(load().tag_for('$MOD_VERSION'))
-        ")"
+        # The version travels as an argument: interpolating it into a Python
+        # literal let a quote break the run, and a crafted value run on the runner.
+        TAG="$(PYTHONPATH=.mc-bump python3 -m lib.config --tag "$MOD_VERSION")"
         echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
     # The matrix fans out over this. One version per job, so three claimed

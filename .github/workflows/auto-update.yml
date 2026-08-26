@@ -244,14 +244,17 @@ jobs:
           PYTHONPATH=.mc-bump python3 -c "
           import os
           from lib.config import load
+          from lib.github import output
           from lib.gradle import read_property
           project = load()
           text = project.paths.gradle_properties.read_text(encoding='utf-8')
           keys = project.loader.gradle_keys
+          pairs = {}
+          for role in ('loader', 'api', 'buildtool'):
+              pairs[role + '_version'] = read_property(text, keys[role])
+              pairs[role + '_key'] = keys[role]
           with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as out:
-              for role in ('loader', 'api', 'buildtool'):
-                  out.write(f'{role}_version={read_property(text, keys[role]) or \"\"}\n')
-                  out.write(f'{role}_key={keys[role]}\n')
+              out.write(output(pairs) + '\n')
           "
           # touch: the ladder truncates these on start, but it never got that far
           # if the test step died on its very first command.
