@@ -1,4 +1,4 @@
-name: Self test
+name: "Internal: self test"
 
 # mc-bump IS the CI of other repositories, so nothing here may rot unnoticed. The
 # shell scripts in particular carry the whole test logic and were never linted

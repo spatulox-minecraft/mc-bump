@@ -1,0 +1,109 @@
+name: "Internal: sync the wiki"
+
+# The GitHub wiki is a SEPARATE git repository (<repo>.wiki.git) with no pull
+# requests and no review. Keeping the pages in wiki/ means they travel with the
+# code that changed, in the same commit and the same review, and this workflow is
+# what publishes them.
+#
+# One direction only: wiki/ in this repository is the source of truth, and an
+# edit made in the wiki web UI is overwritten by the next push here. That is the
+# trade for reviewable documentation.
+#
+# Not one of the three reusable pipelines. This one is about this repository.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "wiki/**"
+      - ".github/workflows/internal-wiki.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  # Two syncs racing over the same wiki repository would force-push over each
+  # other. cancel-in-progress stays false: a push must not be cut in flight.
+  group: wiki-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: Publish wiki/ to the wiki
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # A missing Home.md means wiki/ was renamed, emptied or moved. Since the
+      # sync below deletes whatever is no longer in wiki/, that mistake would
+      # wipe every page. Refuse instead.
+      - name: Is there something to publish?
+        run: |
+          set -euo pipefail
+          if [ ! -f wiki/Home.md ]; then
+            echo "::error::wiki/Home.md not found. Refusing to sync, this would delete every wiki page."
+            exit 1
+          fi
+          echo "==> $(find wiki -name '*.md' | wc -l) page(s) to publish"
+
+      - name: Clone the wiki
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          # The wiki repository only exists once a first page has been created
+          # from the web UI. Until then this clone fails, and the message a
+          # maintainer gets should say exactly that.
+          if ! git clone -q \
+              "https://x-access-token:${GH_TOKEN}@github.com/${REPOSITORY}.wiki.git" \
+              wiki-clone 2> clone-error.txt; then
+            cat clone-error.txt
+            if grep -q "not found" clone-error.txt; then
+              echo "::error::${REPOSITORY}.wiki.git does not exist. Enable Wikis in Settings, then create the first page from the web UI: the wiki repository is not created until a page is."
+            else
+              echo "::error::cannot clone ${REPOSITORY}.wiki.git, see the git error above"
+            fi
+            exit 1
+          fi
+
+      # --delete so a page removed from wiki/ disappears from the wiki too;
+      # --exclude .git so the wiki's own history survives it.
+      - name: Copy the pages over
+        run: rsync -a --delete --exclude '.git' wiki/ wiki-clone/
+
+      - name: Publish
+        working-directory: wiki-clone
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+          REPOSITORY: ${{ github.repository }}
+          SERVER_URL: ${{ github.server_url }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+
+          # Nothing staged is the normal outcome of a push that touched wiki/
+          # without changing the rendered pages.
+          if git diff --cached --quiet; then
+            echo "### The wiki is already up to date." >> "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          git commit -q \
+            -m "docs(wiki): sync from ${SOURCE_SHA}" \
+            -m "${SERVER_URL}/${REPOSITORY}/commit/${SOURCE_SHA}"
+          git push -q origin HEAD
+
+          {
+            echo "### Wiki updated :books:"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| pages | \`$(find . -name '*.md' -not -path './.git/*' | wc -l)\` |"
+            echo "| source | \`${SOURCE_SHA}\` |"
+            echo
+            echo "[Open the wiki](${SERVER_URL}/${REPOSITORY}/wiki)"
+          } >> "$GITHUB_STEP_SUMMARY"

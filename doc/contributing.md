@@ -19,7 +19,7 @@ Standard library only, except PyYAML in `config.py`. No `bash`, no `jq`, no
 | `lib/` | Everything mc-bump knows how to do, as importable modules. |
 | `scripts/` | Four executables: argument parsing, environment variables and exit codes around `lib/`. |
 | `tests/` | `unittest`, no network. |
-| `.github/workflows/` | The three reusable pipelines, plus `self-test.yml`. |
+| `.github/workflows/` | The three reusable pipelines, plus the `internal-*` ones this repository runs on itself. |
 | `.github/actions/` | `setup`, `report`, `report-issue`, composite actions shared by the pipelines. |
 | `testmod/fabric/` | A real Fabric mod, built and booted by the self-test. |
 | `doc/` | These pages. |
@@ -67,7 +67,7 @@ which is where the interesting cases live.
 ## The self-test
 
 mc-bump *is* the CI of other repositories, so nothing here may rot unnoticed.
-`.github/workflows/self-test.yml` runs on every push and pull request:
+`.github/workflows/internal-self-test.yml` runs on every push and pull request:
 
 | Job | |
 |---|---|
@@ -104,9 +104,21 @@ Two audiences, two places, and they must not swap.
   mc-bump.
 - **`doc/` and the per-directory READMEs** are for people changing mc-bump.
 
-A behaviour change that a mod author can observe means a wiki edit too. The wiki
-is a separate git repository, cloned from
-`git@github.com:spatulox-minecraft/mc-bump.wiki.git`.
+A behaviour change that a mod author can observe means a wiki edit too.
+
+The pages live in `wiki/` **in this repository**, and
+`.github/workflows/internal-wiki.yml` publishes them to the GitHub wiki on every push to
+`main` that touches them. So a documentation change travels with the code that
+caused it, in the same commit and the same review, which is what the wiki's own
+repository cannot offer: it has no pull requests and no review.
+
+The sync is **one direction**. `wiki/` is the source of truth, and an edit made
+in the wiki web UI is overwritten by the next push here. Edit the files, not the
+website.
+
+Deleting a file from `wiki/` deletes the page. The workflow refuses to run at all
+when `wiki/Home.md` is missing, since that means the directory was renamed or
+emptied and the sync would otherwise wipe every page.
 
 ## Releasing
 
