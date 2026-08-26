@@ -424,6 +424,12 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="key=value lines for $GITHUB_OUTPUT",
     )
+    # A flag rather than a `python3 -c` in the workflow: the version came from
+    # gradle.properties, and pasting it into a Python literal through the shell
+    # made a quote break the run and a crafted value run on the runner.
+    group.add_argument(
+        "--tag", metavar="VERSION", help="release tag for this mod_version"
+    )
     parser.add_argument("--root", help="mod repository (default: walk up from the cwd)")
     args = parser.parse_args(argv)
 
@@ -431,6 +437,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.github_output:
         print(export_github_output(project))
+    elif args.tag:
+        print(project.tag_for(args.tag))
     else:
         print(export_json(project))
     return 0

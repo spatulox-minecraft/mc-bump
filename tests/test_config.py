@@ -7,6 +7,8 @@ and by name.
 
 from __future__ import annotations
 
+import contextlib
+import io
 import tempfile
 import unittest
 from pathlib import Path
@@ -163,6 +165,22 @@ class ExportTest(ModRepoTestCase):
         self.assertEqual(pairs["gametest"], "false")
         self.assertEqual(pairs["stores"], "modrinth,curseforge")
         self.assertEqual(pairs["assignee"], "Spatulox")
+
+
+class TagCliTest(ModRepoTestCase):
+    def test_the_tag_flag_renders_the_configured_template(self):
+        """The workflow calls this instead of building a Python literal around a
+        value read from gradle.properties."""
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            config_module.main(["--tag", "26.2-1.1.0", "--root", str(self.root)])
+        self.assertEqual(buffer.getvalue().strip(), "v26.2-1.1.0")
+
+    def test_a_quote_in_the_version_is_data_not_code(self):
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            config_module.main(["--tag", "1.0'+x+'", "--root", str(self.root)])
+        self.assertEqual(buffer.getvalue().strip(), "v1.0'+x+'")
 
 
 if __name__ == "__main__":

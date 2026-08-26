@@ -67,6 +67,9 @@ runs:
       run: |
         set -euo pipefail
 
+        # Exported: jq reads it from the environment below rather than having it
+        # spliced into its filter.
+        export TITLE
         TITLE="$(PYTHONPATH=.mc-bump python3 -m lib.report --failure-title \
           --workflow "$GITHUB_WORKFLOW" --ref "$GITHUB_REF_NAME")"
 
@@ -104,8 +107,11 @@ runs:
 
         # Exact title match rather than --search: the title contains brackets,
         # which the GitHub search syntax tokenises oddly and matches fuzzily.
+        # env.TITLE rather than a spliced literal: the title carries the branch
+        # name, and a quote in it made jq fail, `|| true` swallow it, and a
+        # duplicate issue open on every single run.
         EXISTING="$(gh issue list --state open --label "$LABEL" --limit 100 \
-          --json number,title -q ".[] | select(.title == \"$TITLE\") | .number" \
+          --json number,title -q '.[] | select(.title == env.TITLE) | .number' \
           | head -n 1 || true)"
 
         if [ -n "$EXISTING" ]; then
