@@ -210,26 +210,123 @@ def prepare_run_dir(test: ServerTest) -> Path:
     return run_dir
 
 
-def _terminate(process: subprocess.Popen) -> None:
-    """Kill the whole process group: gradle is a launcher, the JVM is the server.
+def _process_tree(pid: int) -> list[int]:
+    """`pid` and every descendant, parents first, read BEFORE anything is signalled.
 
-    The shell version only ever signalled gradle, which left the server alive on
-    a timeout until the runner reclaimed it.
+    Gradle forks its build JVM through setsid(), so the server ends up in a
+    session and a process group of its own — neither of which leads back to us.
+    The only link left is the parent chain, and killing the launcher erases that
+    too by orphaning its children. Hence a snapshot up front.
+    """
+    try:
+        listing = subprocess.run(
+            ["ps", "-eo", "pid=,ppid="],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        ).stdout
+    except (OSError, subprocess.SubprocessError):
+        return [pid]  # no ps: the direct child is still worth killing
+
+    children: dict[int, list[int]] = {}
+    for line in listing.splitlines():
+        fields = line.split()
+        if len(fields) != 2:
+            continue
+        try:
+            child, parent = int(fields[0]), int(fields[1])
+        except ValueError:
+            continue
+        children.setdefault(parent, []).append(child)
+
+    tree: list[int] = []
+    queue = [pid]
+    while queue:
+        current = queue.pop(0)
+        if current in tree:  # ps is a snapshot of a moving target, not a proof
+            continue
+        tree.append(current)
+        queue.extend(children.get(current, ()))
+    return tree
+
+
+def _living(pids: list[int]) -> list[int]:
+    alive = []
+    for pid in pids:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            continue
+        except PermissionError:
+            pass  # it exists, we simply do not own it
+        alive.append(pid)
+    return alive
+
+
+def _signal(pids: list[int], sig: int) -> None:
+    for pid in pids:
+        try:
+            os.kill(pid, sig)
+        except (ProcessLookupError, PermissionError):
+            pass
+
+
+def _wait_for_exit(pids: list[int], timeout: int) -> list[int]:
+    """The survivors after `timeout` seconds, empty when they all went away."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        pids = _living(pids)
+        if not pids:
+            return []
+        time.sleep(0.2)
+    return _living(pids)
+
+
+def _terminate(process: subprocess.Popen) -> None:
+    """Kill the launcher AND everything it started, then wait until they are gone.
+
+    Signalling our own process group was not enough: gradle detaches its build
+    JVM (see _process_tree), so the Minecraft server survived every kill and kept
+    writing to run/. The next boot in the same workspace then wiped the world
+    while a dying server was still saving into it, and booted on the debris:
+
+        Unable to read or access the world gen settings file!
+        Failed to load datapacks, can't proceed with server load
+        java.lang.IllegalStateException: Overworld settings missing
+
+    Waiting for every pid to disappear is therefore half the fix, not politeness:
+    the caller wipes the world directory next, and a shutdown still in flight
+    would write into it afterwards.
     """
     if process.poll() is not None:
         return
+    tree = _process_tree(process.pid)
+
+    _signal(tree, signal.SIGTERM)
     try:
-        os.killpg(os.getpgid(process.pid), signal.SIGTERM)
-    except (ProcessLookupError, PermissionError):
-        process.terminate()
-    try:
-        process.wait(timeout=15)
+        process.wait(timeout=15)  # reap our own child, so it stops looking alive
     except subprocess.TimeoutExpired:
+        pass
+
+    stubborn = _wait_for_exit(tree, 15)
+    if not stubborn:
+        return
+
+    _signal(stubborn, signal.SIGKILL)
+    if process.poll() is None:
         try:
-            os.killpg(os.getpgid(process.pid), signal.SIGKILL)
-        except (ProcessLookupError, PermissionError):
-            process.kill()
-        process.wait(timeout=15)
+            process.wait(timeout=15)
+        except subprocess.TimeoutExpired:
+            pass
+    remaining = _wait_for_exit(stubborn, 15)
+    if remaining:
+        # Not a Failure: the test's own verdict matters more than the cleanup.
+        # But it must be said, because the next boot is the one that will suffer.
+        print(
+            f"==> Warning: {len(remaining)} process(es) survived SIGKILL "
+            f"({', '.join(str(pid) for pid in remaining)}); "
+            f"the next run may find a world they are still writing to"
+        )
 
 
 def run(test: ServerTest) -> None:
