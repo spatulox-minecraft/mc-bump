@@ -1,11 +1,10 @@
 # mc-bump
 
 Reusable CI for Minecraft mods: follow a new Minecraft release, prove the mod
-still works on **every version it claims**, and publish it — driven by one config
-file in the mod's repository.
+still works on **every version it claims**, and publish it, driven by one config
+file in your mod's repository.
 
-Built for Fabric. The loader-specific parts live behind one interface
-(`lib/loaders/base.py`), so NeoForge is one more file next to `fabric.py`.
+Built for Fabric.
 
 ```yaml
 # .github/workflows/ci.yml, in your mod
@@ -21,7 +20,8 @@ jobs:
 |---|---|
 | **[Getting Started](Getting-Started)** | What your mod repository needs, and the three workflow files to add. |
 | **[Configuration](Configuration)** | Every key of `.github/mc-bump.yml`, with its default. |
-| **[Proving the mod works](Proving-the-mod-works)** | `expect` and `expect-count` — turning "it booted" into "it worked". |
+| **[Proving the mod works](Proving-the-mod-works)** | `expect` and `expect-count`, turning "it booted" into "it worked". |
+| **[Versions and compatibility](Versions-and-compatibility)** | What mc-bump writes into your version numbers, and why. |
 | **[Pipelines](Pipelines)** | What `ci`, `auto-update` and `release` actually do, job by job. |
 | **[CLI](CLI)** | Running everything locally, with no GitHub involved. |
 | **[Composite Action](Composite-Action)** | The escape hatch for a pipeline of your own. |
@@ -34,18 +34,18 @@ Everything else follows from these.
 ### One jar covers one series
 
 `26.1.2` and `26.1` are the same series, and a jar that claims the series must be
-booted on **every version of it** — not just the newest. That is what the version
-matrix does, and it is why the compatibility range is only widened *after* the
+booted on **every version of it**, not just the newest. That is what the version
+matrix does, and it is why your compatibility range is only widened *after* the
 matrix proves it.
 
-The alternative — test the newest, announce the series — publishes claims about
-versions nobody ever ran.
+The alternative, testing the newest and announcing the series, publishes claims
+about versions nobody ever ran.
 
 ### An update moves one variable
 
 Minecraft. The loader and its API stay **frozen**, and only move through an
-[escalation ladder](How-it-works#the-escalation-ladder) as a reaction to a red
-matrix, one at a time, each followed by a full matrix re-run.
+[escalation ladder](Versions-and-compatibility#the-escalation-ladder) as a
+reaction to a red matrix, one at a time, each followed by a full matrix re-run.
 
 A red matrix therefore has one suspect instead of three.
 
@@ -53,15 +53,9 @@ A red matrix therefore has one suspect instead of three.
 
 | Pipeline | What it is for |
 |---|---|
-| [`ci`](Pipelines#ci) | On every push and pull request: unit tests, then build + boot a server for each claimed Minecraft version, plus the client gametest. |
+| [`ci`](Pipelines#ci) | On every push and pull request: unit tests, then build and boot a server for each claimed Minecraft version, plus the client gametest. |
 | [`auto-update`](Pipelines#auto-update) | Weekly: detect a new Minecraft release, resolve the dependencies, run the matrix, escalate the frozen dependencies if it fails, open a pull request. |
 | [`release`](Pipelines#release) | On merge: prove the matrix again, publish to Modrinth and CurseForge in **separate, individually replayable jobs**, then tag. |
-
-## Under the hood
-
-- [How it works](How-it-works) — series arithmetic, the ordering problem, the ladder, the failure report.
-- [Adding a loader](Adding-a-loader) — what a NeoForge implementation has to provide.
-- [Contributing](Contributing) — the repository layout and its test policy.
 
 ---
 

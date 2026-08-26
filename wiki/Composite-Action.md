@@ -1,7 +1,7 @@
 # Composite Action
 
 The escape hatch. For the full pipelines use the
-[reusable workflows](Pipelines); this runs **one mc-bump script** against the mod
+[reusable workflows](Pipelines). This runs **one mc-bump script** against the mod
 repository checked out in the workspace, so you can build a pipeline of your own.
 
 ```yaml
@@ -18,11 +18,11 @@ repository checked out in the workspace, so you can build a pipeline of your own
 | `args` | | `""` | Arguments passed to the command. Word-split, so a list of flags works. |
 | `working-directory` | | `.` | The mod repository. Defaults to the workspace root. |
 
-An unknown `command` fails with `::error::unknown mc-bump command '…'` and prints
+An unknown `command` fails with `::error::unknown mc-bump command '...'` and prints
 the list of available scripts.
 
-The action installs PyYAML itself. It does **not** set up a JDK or Gradle — that
-is your workflow's job, and it is why this is an escape hatch rather than a
+The action installs PyYAML itself. It does **not** set up a JDK or Gradle. That is
+your workflow's job, and it is why this is an escape hatch rather than a
 shortcut.
 
 ## What it does not do
@@ -92,13 +92,13 @@ jobs:
     working-directory: mods/my-mod
 ```
 
-The mod root is otherwise found by walking up from the cwd looking for
-`.github/mc-bump.yml`; `MOD_ROOT` and `--root` are the other two ways to say it.
+Your mod's root is otherwise found by walking up from the cwd looking for
+`.github/mc-bump.yml`. `MOD_ROOT` and `--root` are the other two ways to say it.
 
 ## Environment
 
-Every environment variable the scripts read still applies — set them with `env:`
-on the step:
+Every environment variable the scripts read still applies. Set them with `env:` on
+the step:
 
 ```yaml
 - uses: spatulox-minecraft/mc-bump@v1

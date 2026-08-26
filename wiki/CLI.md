@@ -1,15 +1,15 @@
 # CLI
 
-Everything the CI runs, runs from the mod's repository with **no GitHub
-involved**. Same code, same decisions — the workflows are argument parsing around
-these scripts, and these scripts are argument parsing around `lib/`.
+Everything the CI runs, runs from your mod's repository with **no GitHub
+involved**. Same code, same decisions, so a green run locally means a green run
+in CI.
 
 ```bash
 git clone https://github.com/spatulox-minecraft/mc-bump.git ../mc-bump
 python3 -m pip install pyyaml
 ```
 
-Requires `python3` and `pyyaml`, and nothing else — no `bash`, no `jq`, no
+Requires `python3` and `pyyaml`, and nothing else. No `bash`, no `jq`, no
 `shellcheck`.
 
 ```bash
@@ -27,20 +27,19 @@ PYTHONPATH=$MCB python3 -m lib.config --json           # the resolved config
 
 ## Common to all four scripts
 
-- They run **from the mod repository**, not from mc-bump's. The root is found by
-  walking up from `$MOD_ROOT` or the cwd looking for `.github/mc-bump.yml`;
-  `--root` overrides it.
-- A `Failure` prints `error: …` rather than a traceback.
+- They run **from your mod's repository**, not from mc-bump's. The root is found
+  by walking up from `$MOD_ROOT` or the cwd looking for `.github/mc-bump.yml`,
+  and `--root` overrides it.
+- An error prints `error: ...` rather than a traceback.
 - `Ctrl-C` exits `130`.
-- `$GITHUB_OUTPUT` is written when it is set, so the same script serves the CI.
 
 ---
 
-## `mc-bump.py` — resolve an update and apply it
+## `mc-bump.py`, resolve an update and apply it
 
-Resolves what upstream publishes for a target Minecraft version (default: the
-latest Mojang release), writes `gradle.properties` and the loader metadata, and —
-with `--run-tests` — proves it.
+Resolves what upstream publishes for a target Minecraft version, the latest
+Mojang release by default, writes `gradle.properties` and `fabric.mod.json`, and
+with `--run-tests` proves it.
 
 ```bash
 python3 $MCB/scripts/mc-bump.py [VERSION] [flags]
@@ -52,9 +51,9 @@ Mutually exclusive. Without one, it updates and stops.
 
 | Mode | What it does |
 |---|---|
-| *(default)* | Update to the target version. Loader and API stay frozen; the compatibility range is widened optimistically, and `.mc-update-state.json` snapshots what to restore. |
-| `--run-tests` | The above, then the full matrix with its escalation ladder, then `--mark-supported` on green / `--revert-compat` on red. |
-| `--mark-supported` | Add the current version to `supported_minecraft_versions`, recompute the range and the jar name. **Only after a green matrix** — this list is what the stores announce. |
+| *(default)* | Update to the target version. Loader and API stay frozen, the compatibility range is widened optimistically, and `.mc-update-state.json` snapshots what to restore. |
+| `--run-tests` | The above, then the full matrix with its escalation ladder, then mark the version supported on green, or revert the claims on red. |
+| `--mark-supported` | Add the current version to `supported_minecraft_versions`, recompute the range and the jar name. **Only after a green matrix**, since this list is what the stores announce. |
 | `--revert-compat` | Restore the claims from the snapshot, keeping the version bumps. |
 | `--bump-api` | One rung of the ladder: move the frozen API to the newest release for the current `minecraft_version`. |
 | `--bump-loader` | Same, for the loader. |
@@ -63,12 +62,12 @@ Mutually exclusive. Without one, it updates and stops.
 
 | Flag | |
 |---|---|
-| `VERSION` | Target Minecraft version. Default: the latest Mojang release. |
+| `VERSION` | Target Minecraft version. Defaults to the latest Mojang release. |
 | `--dry-run` | Show the changes, write nothing. Refused with `--run-tests`. |
 | `--json` | JSON on stdout, nothing else. Refused with `--run-tests`. |
 | `--force` | Reapply the version already in the repo. |
-| `--buildtool VERSION` / `--loom VERSION` | Pin the build plugin instead of resolving the latest stable — an old Minecraft version may need an older fabric-loom. |
-| `--root PATH` | The mod repository. |
+| `--buildtool VERSION` or `--loom VERSION` | Pin the build plugin instead of resolving the latest stable one. An old Minecraft version may need an older fabric-loom. |
+| `--root PATH` | Your mod's repository. |
 
 ### Exit codes
 
@@ -81,7 +80,7 @@ Mutually exclusive. Without one, it updates and stops.
 
 `2` is a **normal** outcome, not a failure: Fabric had not published a loader for
 that Minecraft release yet. The weekly workflow says so in the job summary and
-retries next week. `3` likewise means the rung cannot change anything, not that
+retries next week. `3` likewise means that rung cannot change anything, not that
 something broke.
 
 ### Examples
@@ -102,25 +101,22 @@ python3 $MCB/scripts/mc-bump.py --run-tests
 
 ---
 
-## `headless-server-test.py` — one server
+## `headless-server-test.py`, one server
 
-Boots a dedicated server with the mod on the version currently in
-`gradle.properties`, and runs `check_log()` against the log. This is the fastest
-way to iterate on your [`expect` patterns](Proving-the-mod-works).
+Boots a dedicated server with your mod on the version currently in
+`gradle.properties`, and checks the log. This is the fastest way to iterate on
+your [`expect` patterns](Proving-the-mod-works).
 
 ```bash
 python3 $MCB/scripts/headless-server-test.py
 ```
 
-Flags: `--log` · `--minecraft` · `--run-dir` · `--level-name` · `--root`.
+Flags: `--log`, `--minecraft`, `--run-dir`, `--level-name`, `--root`.
 
-The world is **wiped between runs**: a save written by a newer Minecraft refuses
-to load on an older one, which the matrix would hit immediately.
+The world is **wiped between runs**, because a save written by a newer Minecraft
+refuses to load on an older one, which the matrix would hit immediately.
 
 ### Environment
-
-The variables the shell version took are still honoured, so the CI steps and any
-habit built around them keep working.
 
 | Variable | Meaning | Default |
 |---|---|---|
@@ -131,59 +127,60 @@ habit built around them keep working.
 | `EXPECTED_MC` | version that must actually boot | `gradle.properties` |
 | `GRADLE_ARGS` | extra gradle arguments, split with `shlex` | none |
 | `LEVEL_NAME` | world name, wiped before each run | `ci-smoke-test` |
-| `MOD_ROOT` | the mod repository | walked up from the cwd |
+| `MOD_ROOT` | your mod's repository | walked up from the cwd |
 
 ---
 
-## `test-matrix.py` — every claimed version
+## `test-matrix.py`, every claimed version
 
 Builds and boots a server for each version `--list-test-versions` prints. Exits
-`1` if any of them fails, and records the outcome as
-`<version> <ok|build|server>`, one per line.
+`1` if any of them fails, and records the outcome as `<version> <ok|build|server>`,
+one per line.
 
 ```bash
 python3 $MCB/scripts/test-matrix.py
 python3 $MCB/scripts/test-matrix.py --minecraft 26.1        # restrict the run
 ```
 
-Flags: `--minecraft V…` · `--status-file` · `--root`.
+Flags: `--minecraft V...`, `--status-file`, `--root`.
 Environment: `MC_VERSIONS` (space separated), `STATUS_FILE` (default
 `test-matrix-status.txt`), plus everything `headless-server-test.py` accepts.
 
-The status file is written **after every version**, so a job killed mid-run still
+The status file is written **after every version**, so a run killed halfway still
 reports what it got through.
 
-One retry, and only for a specific case: a build-setup deadlock that never
-reaches `Starting minecraft server version`. A mod that is genuinely broken
-*does* get that far, which is how the two are told apart.
+There is one retry, and only for a specific case: a build-setup deadlock that
+never reaches `Starting minecraft server version`. A mod that is genuinely broken
+*does* get that far, which is how the two are told apart, so a real failure is
+never retried.
 
 In CI this sequential loop is usually replaced by a GitHub job matrix running the
-same versions in parallel; it stays the local entry point, and the sequential
-path the ladder needs.
+same versions in parallel. It stays the local entry point.
 
 ---
 
-## `test-with-escalation.py` — the matrix plus the ladder
+## `test-with-escalation.py`, the matrix plus the ladder
 
-`test-matrix.py`, and on failure bump the frozen dependencies one at a time — API
-first, then loader — replaying the **whole** matrix after each bump. Exits `1`
+`test-matrix.py`, and on failure bump the frozen dependencies one at a time, API
+first and then loader, replaying the **whole** matrix after each bump. Exits `1`
 when it is still red after every rung.
 
 ```bash
 python3 $MCB/scripts/test-with-escalation.py
 ```
 
-Flags: `--status-file` · `--escalation-file` · `--root`.
+Flags: `--status-file`, `--escalation-file`, `--root`.
 Environment: `ESCALATION_FILE` (default `test-escalation.txt`), plus everything
 the two scripts above accept.
 
-The bumps are **kept** on failure: they are the dependency diff someone picks up
-from. The mod metadata is not touched — a bump is a hypothesis, and the floor is
-only engraved by `mc-bump.py --mark-supported` once the matrix has proven it.
+The bumps are **kept** on failure, since they are the dependency diff you pick up
+from. Your `fabric.mod.json` is not touched: a bump is a hypothesis, and the
+floor is only written by `mc-bump.py --mark-supported` once the matrix has proven
+it.
 
 ---
 
-## `python3 -m lib.config` — the resolved config
+## `python3 -m lib.config`, the resolved config
 
 ```bash
 PYTHONPATH=$MCB python3 -m lib.config --json            # everything, resolved
@@ -195,25 +192,16 @@ Run it after editing `.github/mc-bump.yml`. Validation
 [refuses by name](Configuration#validation-is-strict-on-purpose), so this turns a
 typo into a message instead of a green pipeline testing the wrong thing.
 
-## `python3 -m lib.report` — the failure report
-
-```bash
-PYTHONPATH=$MCB python3 -m lib.report --failure-issue --reports-dir mc-bump-reports
-```
-
-Renders the markdown the CI pastes into the issue and the pull request, from
-report directories on disk. Useful when the report itself is what looks wrong.
-
 ---
 
-## Files these scripts leave in the mod repository
+## Files these scripts leave in your repository
 
 Worth adding to your `.gitignore`.
 
 | File | Written by | Read by |
 |---|---|---|
-| `test-matrix-status.txt` | `test-matrix.py` | the report, for the test table |
-| `test-escalation.txt` | `test-with-escalation.py` | the report, for the escalation table |
+| `test-matrix-status.txt` | `test-matrix.py` | the failure report, for the test table |
+| `test-escalation.txt` | `test-with-escalation.py` | the failure report, for the escalation table |
 | `build-<version>.log`, `server-test-<version>.log` | the matrix | the collapsible logs |
 | `server-test.log` | `headless-server-test.py` | you |
 | `.mc-update-state.json` | `mc-bump.py` | `--revert-compat`, `--mark-supported` |

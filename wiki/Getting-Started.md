@@ -9,8 +9,7 @@ mc-bump edits **your** repository, so it has to recognise what it reads.
 
 ### `gradle.properties`
 
-These keys are read, and some are rewritten by an update. They are the Fabric
-names; a future loader declares its own in `gradle_keys`.
+These keys are read, and some are rewritten by an update.
 
 | Key | Read | Written by an update | Meaning |
 |---|---|---|---|
@@ -21,11 +20,11 @@ names; a future loader declares its own in `gradle_keys`.
 | `loader_version` | ✅ | frozen¹ | `fabricloader` |
 | `fabric_api_version` | ✅ | frozen¹ | Fabric API |
 | `loom_version` | ✅ | ✅ | the build plugin follows, it does not ship in the jar |
-| `archives_base_name` | — | — | used by your `build.gradle` for the jar name |
+| `archives_base_name` | | | used by your `build.gradle` for the jar name |
 
-¹ Frozen means: an update never touches them. Only the
-[escalation ladder](How-it-works#the-escalation-ladder) moves them, one rung at a
-time, after a red matrix.
+¹ Frozen means an update never touches them. Only the
+[escalation ladder](Versions-and-compatibility#the-escalation-ladder) moves them,
+one rung at a time, after a red matrix.
 
 A minimal file:
 
@@ -55,7 +54,7 @@ version has to be overridable from the command line:
 ./gradlew build -Pminecraft_version=26.1.1
 ```
 
-Reading it through `project.minecraft_version` is enough — Gradle lets `-P`
+Reading it through `project.minecraft_version` is enough, since Gradle lets `-P`
 override a `gradle.properties` value on its own:
 
 ```groovy
@@ -77,26 +76,26 @@ dependencies {
 |---|---|---|
 | `build` | every pipeline | no |
 | `test` | the unit-test job | `tests.unit.task` |
-| `runServer` | the headless server test | the loader |
-| `runClientGameTest` | the gametest job | the loader |
+| `runServer` | the headless server test | no |
+| `runClientGameTest` | the gametest job | no |
 | `modrinth` | the release job | only when `modrinth` is in `release.stores` |
 | `publishCurseForge` | the release job | only when `curseforge` is in `release.stores` |
 
 The two publish tasks come from your own build script (`minotaur`,
-`cf-gradle-plugin`, …). mc-bump only calls them.
+`cf-gradle-plugin`, and so on). mc-bump only calls them.
 
-### The loader metadata
+### `fabric.mod.json`
 
-`fabric.mod.json`, at the path given by `mod.metadata`. mc-bump rewrites
-`depends.minecraft` (the compatibility range), `depends.java`, and — when the
-ladder moved them — `depends.fabricloader` and `depends.fabric-api`.
+At the path given by `mod.metadata`. mc-bump rewrites `depends.minecraft` (the
+compatibility range), `depends.java`, and, when the ladder moved them,
+`depends.fabricloader` and `depends.fabric-api`.
 
 If you use mixins, point `mod.mixins` at the mixin config so its
 `compatibilityLevel` follows the Java version.
 
 ## 2. `.github/mc-bump.yml`
 
-The minimum. Everything else has a default — see [Configuration](Configuration).
+The minimum. Everything else has a default, see [Configuration](Configuration).
 
 ```yaml
 loader: fabric
@@ -116,7 +115,7 @@ PYTHONPATH=../mc-bump python3 -m lib.config --json
 ## 3. The workflows
 
 One file per pipeline, in your mod's `.github/workflows/`. Each one is a thin
-`uses:` — every decision lives in the config.
+`uses:`, since every decision lives in the config.
 
 ### CI
 
@@ -168,10 +167,11 @@ jobs:
     secrets: inherit
 ```
 
-The index syntax is not a style choice: a context property whose name contains a
-hyphen cannot be reached with a dot. And `inputs.force == true` rather than
-`inputs.force` is what keeps the scheduled run working — on a `schedule` trigger
-`inputs` is empty, and an empty string is not a boolean.
+Two details worth copying exactly. A context property whose name contains a
+hyphen cannot be reached with a dot, hence the index syntax. And
+`inputs.force == true` rather than `inputs.force` is what keeps the scheduled run
+working: on a `schedule` trigger `inputs` is empty, and an empty string is not a
+boolean.
 
 ### Release
 
@@ -198,8 +198,8 @@ jobs:
 ```
 
 The release is triggered by `mod_version` changing, not by "the claimed versions
-grew" — the tag carries `mod_version`, so it is the only field that guarantees a
-unique name, and it covers a manual `1.1.0 → 1.2.0` with no Minecraft change.
+grew". The tag carries `mod_version`, so it is the only field that guarantees a
+unique name, and it covers a manual `1.1.0` to `1.2.0` with no Minecraft change.
 Running it on an already released version is a no-op, by design.
 
 ## 4. Repository settings
@@ -234,7 +234,7 @@ If the second one is green, your CI will be too. See [CLI](CLI) for the rest.
 `@v1` is a moving tag: it follows the v1 line. Pin a commit SHA instead if you
 want the pipeline to change only when you say so.
 
-> **Note** — a pull request opened by the auto-update with the default
+> **Note.** A pull request opened by the auto-update with the default
 > `GITHUB_TOKEN` does **not** trigger `pull_request` workflows, so your `ci.yml`
 > will not run on it. That is harmless: `auto-update` already built and booted
 > every claimed version on that branch.
