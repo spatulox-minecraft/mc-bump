@@ -82,7 +82,8 @@ dependencies {
 | `publishCurseForge` | the release job | only when `curseforge` is in `release.stores` |
 
 The two publish tasks come from your own build script (`minotaur`,
-`cf-gradle-plugin`, and so on). mc-bump only calls them.
+`cf-gradle-plugin`, and so on). mc-bump only calls them. No task backs `github`
+in `release.stores`: the release job attaches the jars `build` already produced.
 
 ### `fabric.mod.json`
 
@@ -211,7 +212,8 @@ Running it on an already released version is a no-op, by design.
 | Secret `CURSEFORGE_TOKEN` | only if `curseforge` is in `release.stores` |
 
 The release pipeline checks both secrets **before** the matrix: a missing token
-is a two second failure instead of a ninety minute one.
+is a two second failure instead of a ninety minute one. `github` in
+`release.stores` needs no secret at all — it publishes with `github.token`.
 
 `secrets: inherit` is what passes them through. Without it, the reusable workflow
 sees nothing.

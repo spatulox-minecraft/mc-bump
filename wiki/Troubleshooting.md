@@ -52,7 +52,7 @@ server test unable to prove anything.
 
 ### `release.stores: unknown store(s) ...`
 
-Known stores: `modrinth`, `curseforge`.
+Known stores: `modrinth`, `curseforge`, `github`.
 
 ---
 

@@ -199,13 +199,26 @@ like everything else matched against the log.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `stores` | `[modrinth, curseforge]` | Where to publish. Known: `modrinth`, `curseforge`. |
+| `stores` | `[modrinth, curseforge]` | Where to publish. Known: `modrinth`, `curseforge`, `github`. |
 | `branch-prefix` | `chore/mc-` | The auto-update branch is `<prefix><minecraft version>`. |
 | `artifact-retention-days` | `30` | How long the logs and reports are kept. |
 
 A store listed here makes its token **required**: the release pipeline refuses up
 front when `MODRINTH_TOKEN` or `CURSEFORGE_TOKEN` is empty. Publishing to one
 store only is `stores: [modrinth]`.
+
+`github` is the exception: it needs no token and no Gradle task. It creates a
+**GitHub release** on the release tag, with the jars from `build/libs` attached
+— the mod jar and, when the build script asks for one
+(`java { withSourcesJar() }`), the sources jar. The body is the same
+compatibility table the tag annotation carries, followed by the notes GitHub
+generates from the commits. It is opt-in: add it, the default list does not have
+it.
+
+```yaml
+release:
+  stores: [modrinth, curseforge, github]
+```
 
 ## `notify`
 
