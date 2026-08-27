@@ -122,9 +122,17 @@ class ValidationTest(unittest.TestCase):
             "mesage",
         )
 
+    def test_github_is_a_known_store(self):
+        """The GitHub release is opt-in: a known store, never a default one."""
+        project = self._load(CONFIG + "\nrelease:\n  stores: [modrinth, github]\n")
+        self.assertEqual(project.raw["release"]["stores"], ["modrinth", "github"])
+
     def test_an_unknown_store(self):
         self._rejects(
-            CONFIG + "\nrelease:\n  stores: [modrinth, itch]\n", "itch", "modrinth"
+            CONFIG + "\nrelease:\n  stores: [modrinth, itch]\n",
+            "itch",
+            "modrinth",
+            "github",
         )
 
     def test_a_multiline_value_is_refused_by_name(self):

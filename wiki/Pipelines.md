@@ -175,7 +175,7 @@ over the same branch, and cancelling one mid-matrix leaves a half-written repo.
 Publishes to each configured store, then tags.
 
 ```
-config ── check ── matrix ──┬── publish-modrinth ──┬── tag
+config ── check ── matrix ──┬── publish-modrinth ──┬── tag ── publish-github
                             └── publish-curseforge ┘
 ```
 
@@ -190,6 +190,7 @@ config ── check ── matrix ──┬── publish-modrinth ──┬─�
 |---|---|
 | `MODRINTH_TOKEN` | when `modrinth` is in `release.stores` |
 | `CURSEFORGE_TOKEN` | when `curseforge` is in `release.stores` |
+| none | `github` publishes with `github.token`, which `contents: write` already covers |
 
 `secrets: inherit` in your caller is what passes them through.
 
@@ -236,6 +237,23 @@ version, the supported list, the range and the Java version.
 The tag means *"this version is RELEASED"*, which is why it is pushed **after** a
 successful upload. That ordering is what makes a failure recoverable: no tag is
 left behind, so re-running simply tries again.
+
+### `publish-github`, after the tag
+
+A GitHub release hangs off a tag, so this one cannot run in the store row: it
+comes **after** `tag`. That would normally make it unreplayable, since `check`
+refuses everything once the release tag is out — so it is the one job that does
+not gate on that verdict. It runs whenever the guards passed, a re-run of an
+already released version included, and asks `gh release view` whether there is
+anything left to do.
+
+`gh release view` replaces the marker tag here. The markers exist because
+CurseForge's listing API needs a key the upload token is not; the GitHub API is
+free, authenticated by `github.token`, and authoritative.
+
+The practical consequence: delete the release, re-run the workflow, and it comes
+back — jars, compatibility table and generated notes included. No tag is ever
+created ahead of a successful upload, so the invariant above still holds.
 
 ### Concurrency
 

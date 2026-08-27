@@ -15,6 +15,10 @@ name: mc-bump release
 # failing left the run with no tag, and every re-run hit "version already exists"
 # on Modrinth — the pipeline could never finish again without a human. A marker
 # tag per store is what makes a re-run skip what is already out there.
+#
+# `github` is the exception to that ordering: a GitHub release hangs off the tag,
+# so it can only be created after it. It stays replayable by ignoring the
+# "already released" verdict and asking `gh release view` instead.
 
 on:
   workflow_call:
@@ -119,7 +123,8 @@ jobs:
           esac
 
           # A token missing or expired is a two second check here, or a ninety
-          # minute one after the matrix.
+          # minute one after the matrix. `github` is absent on purpose: it
+          # publishes with github.token, which is always there.
           MISSING=""
           case ",$STORES," in
             *,modrinth,*)   [ -n "${MODRINTH_TOKEN:-}" ]   || MISSING="$MISSING MODRINTH_TOKEN" ;;
@@ -406,9 +411,173 @@ jobs:
             echo "| Java | \`$JAVA\` |"
           } >> "$GITHUB_STEP_SUMMARY"
 
+  # The GitHub release is not a store like the other two: it needs the tag to
+  # exist, so it runs AFTER the tag job. That ordering would normally make it
+  # unreplayable, since `check` refuses everything once the release tag is out
+  # — so this job deliberately does NOT gate on check.outputs.publish. It runs
+  # whenever the guards passed, a re-run of an already released version
+  # included, and decides for itself whether anything is left to do. Deleting
+  # the release and re-running therefore recreates it.
+  #
+  # `gh release view` replaces the marker tag here: the markers exist because
+  # CurseForge's listing API needs a key the upload token is not, while the
+  # GitHub API is free, authenticated by github.token, and authoritative.
+  publish-github:
+    name: Publish the GitHub release
+    needs: [config, check, matrix, tag]
+    if: >-
+      always()
+      && needs.config.outputs.release == 'true'
+      && contains(needs.config.outputs.stores, 'github')
+      && needs.check.result == 'success'
+      && !contains(needs.*.result, 'failure')
+      && !contains(needs.*.result, 'cancelled')
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ needs.config.outputs.tag }}
+      DRY_RUN: ${{ inputs.dry-run }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # the tags are what the generated notes diff against
+          fetch-depth: 0
+      - uses: actions/checkout@v7
+        with:
+          repository: spatulox-minecraft/mc-bump
+          ref: ${{ inputs.mc-bump-ref }}
+          path: .mc-bump
+
+      - name: Is there anything left to do?
+        id: marker
+        run: |
+          set -euo pipefail
+          skip() {
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "$1" >> "$GITHUB_STEP_SUMMARY"
+          }
+
+          if [ "$DRY_RUN" = "true" ]; then
+            skip "### Dry run: GitHub release skipped."
+            exit 0
+          fi
+
+          # No tag, nothing to hang a release on.
+          if [ -z "$(git ls-remote --tags origin "refs/tags/$TAG")" ]; then
+            skip "### GitHub: \`$TAG\` is not tagged, no release to create."
+            exit 0
+          fi
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            skip "### GitHub: release \`$TAG\` already exists, skipping."
+            exit 0
+          fi
+
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-java@v5
+        if: steps.marker.outputs.skip != 'true'
+        with:
+          distribution: temurin
+          java-version: ${{ needs.config.outputs.java }}
+      - uses: gradle/actions/setup-gradle@v5
+        if: steps.marker.outputs.skip != 'true'
+
+      - name: Install PyYAML
+        if: steps.marker.outputs.skip != 'true'
+        run: python3 -m pip install --quiet --disable-pip-version-check pyyaml
+
+      # The matrix keeps logs, not jars, and on a replay it is skipped
+      # altogether, so the release builds its own artifacts.
+      - name: Build the jars
+        if: steps.marker.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          chmod +x gradlew
+          ./gradlew build --stacktrace
+
+          # The sources jar only exists when the build script asks for it
+          # (`java { withSourcesJar() }`). Its absence is a warning below, not a
+          # failed release, so a build script without it must not break here.
+          if ! ls build/libs/*-sources.jar >/dev/null 2>&1; then
+            ./gradlew sourcesJar --console=plain || true
+          fi
+
+      - name: Write the release notes
+        if: steps.marker.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+          prop() { sed -n "s/^$1=//p" gradle.properties | head -n 1 | tr -d '[:space:]'; }
+
+          MC="$(prop minecraft_version)"
+          SUPPORTED="$(prop supported_minecraft_versions)"
+          JAVA="$(prop java_version)"
+          RANGE="$(PYTHONPATH=.mc-bump python3 -c "
+          from lib.config import load
+          project = load()
+          print(project.loader.read_depends(project.paths, project.loader.depends_keys()['minecraft']))
+          ")"
+
+          # The same table the tag annotation carries: what this jar was built
+          # against, and what it announces.
+          {
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Minecraft | \`$MC\` |"
+            echo "| supported | \`$SUPPORTED\` |"
+            echo "| range | \`$RANGE\` |"
+            echo "| Java | \`$JAVA\` |"
+            echo
+          } > notes.md
+
+          # previous_tag_name is explicit because the per-store marker tags
+          # would otherwise be picked as "the previous release".
+          PREV="$(git tag --list --sort=-v:refname \
+                  | grep -v '^published/' | grep -v -x -F "$TAG" | head -n 1 || true)"
+          gh api "repos/$GITHUB_REPOSITORY/releases/generate-notes" \
+            -f tag_name="$TAG" ${PREV:+-f previous_tag_name="$PREV"} --jq .body \
+            >> notes.md || echo "_Automatic notes unavailable._" >> notes.md
+
+      - name: Create the release
+        if: steps.marker.outputs.skip != 'true'
+        run: |
+          set -euo pipefail
+
+          # -dev jars are the unremapped build outputs; the sources jar ships.
+          JARS=()
+          for jar in build/libs/*.jar; do
+            case "$jar" in *-dev*.jar) continue ;; esac
+            if [ -f "$jar" ]; then
+              JARS+=("$jar")
+            fi
+          done
+          if [ ${#JARS[@]} -eq 0 ]; then
+            echo "::error::no jar in build/libs to attach to the release"
+            exit 1
+          fi
+
+          # --verify-tag: gh would otherwise create the tag itself, and in this
+          # pipeline a tag never precedes a successful publication.
+          gh release create "$TAG" --verify-tag --title "$TAG" \
+            --notes-file notes.md "${JARS[@]}"
+
+          case " ${JARS[*]} " in
+            *-sources.jar*) ;;
+            *) echo "::warning::no sources jar was built; add java { withSourcesJar() } to ship one" ;;
+          esac
+
+          {
+            echo "### GitHub release \`$TAG\` published :package:"
+            echo
+            for jar in "${JARS[@]}"; do
+              echo "- \`$(basename "$jar")\`"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
   report-failure:
     name: Report the failures
-    needs: [config, check, matrix, publish-modrinth, publish-curseforge, tag]
+    needs:
+      [config, check, matrix, publish-modrinth, publish-curseforge, tag, publish-github]
     if: always() && needs.config.result == 'success' && contains(needs.*.result, 'failure')
     runs-on: ubuntu-latest
     permissions:
