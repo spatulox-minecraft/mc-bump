@@ -252,7 +252,7 @@ SCHEMA: dict = {
     },
 }
 
-KNOWN_STORES = ("modrinth", "curseforge")
+KNOWN_STORES = ("modrinth", "curseforge", "github")
 
 
 def _validate(node: dict, schema: dict, prefix: str = "") -> dict:
