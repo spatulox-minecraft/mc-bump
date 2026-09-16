@@ -1,0 +1,177 @@
+{
+  "source": "https://github.com/FabricMC/fabric-example-mod",
+  "versions": {
+    "1.14.4": {
+      "buildtool": "1.15",
+      "gradle": "9.3.0"
+    },
+    "1.15": {
+      "buildtool": "1.15",
+      "gradle": "9.3.0"
+    },
+    "1.15.1": {
+      "buildtool": "1.15",
+      "gradle": "9.3.0"
+    },
+    "1.15.2": {
+      "buildtool": "1.15",
+      "gradle": "9.3.0"
+    },
+    "1.16": {
+      "buildtool": "1.15",
+      "gradle": "9.3.0"
+    },
+    "1.16.1": {
+      "buildtool": "1.15",
+      "gradle": "9.3.0"
+    },
+    "1.16.2": {
+      "buildtool": "1.15",
+      "gradle": "9.3.0"
+    },
+    "1.16.3": {
+      "buildtool": "1.15",
+      "gradle": "9.3.0"
+    },
+    "1.16.4": {
+      "buildtool": "1.15",
+      "gradle": "9.3.0"
+    },
+    "1.16.5": {
+      "buildtool": "1.15",
+      "gradle": "9.3.0"
+    },
+    "1.17": {
+      "buildtool": "0.8",
+      "gradle": "7.0.2"
+    },
+    "1.17.1": {
+      "buildtool": "1.15",
+      "gradle": "9.3.0"
+    },
+    "1.18": {
+      "buildtool": "0.10",
+      "gradle": "7.3"
+    },
+    "1.18.1": {
+      "buildtool": "1.15",
+      "gradle": "9.3.0"
+    },
+    "1.18.2": {
+      "buildtool": "1.15",
+      "gradle": "9.3.0"
+    },
+    "1.19": {
+      "buildtool": "0.12",
+      "gradle": "7.4"
+    },
+    "1.19.1": {
+      "buildtool": "1.15",
+      "gradle": "9.3.0"
+    },
+    "1.19.2": {
+      "buildtool": "1.15",
+      "gradle": "9.3.0"
+    },
+    "1.19.3": {
+      "buildtool": "1.15",
+      "gradle": "9.3.0"
+    },
+    "1.19.4": {
+      "buildtool": "1.15",
+      "gradle": "9.3.0"
+    },
+    "1.20": {
+      "buildtool": "1.2",
+      "gradle": "8.1.1"
+    },
+    "1.20.1": {
+      "buildtool": "1.15",
+      "gradle": "9.3.0"
+    },
+    "1.20.2": {
+      "buildtool": "1.15",
+      "gradle": "9.3.0"
+    },
+    "1.20.3": {
+      "buildtool": "1.15",
+      "gradle": "9.3.0"
+    },
+    "1.20.4": {
+      "buildtool": "1.15",
+      "gradle": "9.3.0"
+    },
+    "1.20.5": {
+      "buildtool": "1.15",
+      "gradle": "9.3.0"
+    },
+    "1.20.6": {
+      "buildtool": "1.15",
+      "gradle": "9.3.0"
+    },
+    "1.21": {
+      "buildtool": "1.6",
+      "gradle": "8.7"
+    },
+    "1.21.1": {
+      "buildtool": "1.15",
+      "gradle": "9.3.0"
+    },
+    "1.21.2": {
+      "buildtool": "1.15",
+      "gradle": "9.3.0"
+    },
+    "1.21.3": {
+      "buildtool": "1.15",
+      "gradle": "9.3.0"
+    },
+    "1.21.4": {
+      "buildtool": "1.15",
+      "gradle": "9.3.0"
+    },
+    "1.21.5": {
+      "buildtool": "1.15",
+      "gradle": "9.3.0"
+    },
+    "1.21.6": {
+      "buildtool": "1.15",
+      "gradle": "9.3.0"
+    },
+    "1.21.7": {
+      "buildtool": "1.15",
+      "gradle": "9.3.0"
+    },
+    "1.21.8": {
+      "buildtool": "1.15",
+      "gradle": "9.3.0"
+    },
+    "1.21.9": {
+      "buildtool": "1.15",
+      "gradle": "9.3.0"
+    },
+    "1.21.10": {
+      "buildtool": "1.15",
+      "gradle": "9.3.0"
+    },
+    "1.21.11": {
+      "buildtool": "1.15",
+      "gradle": "9.3.0"
+    },
+    "26.1": {
+      "buildtool": "1.15",
+      "gradle": "9.3.0"
+    },
+    "26.1.1": {
+      "buildtool": "1.15",
+      "gradle": "9.3.0"
+    },
+    "26.1.2": {
+      "buildtool": "1.15",
+      "gradle": "9.3.0"
+    },
+    "26.2": {
+      "buildtool": "1.17",
+      "gradle": "9.5.1"
+    }
+  }
+}
