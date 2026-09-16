@@ -146,7 +146,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   ci:
-    uses: spatulox-minecraft/mc-bump/.github/workflows/ci.yml@v1
+    uses: spatulox-minecraft/mc-bump/.github/workflows/ci.yml@v2
     secrets: inherit
 ```
 
@@ -172,7 +172,7 @@ permissions:
   issues: write
 jobs:
   update:
-    uses: spatulox-minecraft/mc-bump/.github/workflows/auto-update.yml@v1
+    uses: spatulox-minecraft/mc-bump/.github/workflows/auto-update.yml@v2
     with:
       minecraft-version: ${{ inputs['minecraft-version'] }}
       force: ${{ inputs.force == true }}
@@ -203,7 +203,7 @@ permissions:
   issues: write
 jobs:
   release:
-    uses: spatulox-minecraft/mc-bump/.github/workflows/release.yml@v1
+    uses: spatulox-minecraft/mc-bump/.github/workflows/release.yml@v2
     with:
       dry-run: ${{ inputs.dry-run == true }}
     secrets: inherit
@@ -244,8 +244,10 @@ If the second one is green, your CI will be too. See [CLI](CLI) for the rest.
 
 ## Pinning a version
 
-`@v1` is a moving tag: it follows the v1 line. Pin a commit SHA instead if you
-want the pipeline to change only when you say so.
+`@v2` is a tag moved by hand to each mc-bump release of the v2 line. Pin a
+commit SHA instead if you want the pipeline to change only when you say so.
+`@v1` still works and stays where it is, without release channels or the Loom
+selection.
 
 > **Note.** A pull request opened by the auto-update with the default
 > `GITHUB_TOKEN` does **not** trigger `pull_request` workflows, so your `ci.yml`

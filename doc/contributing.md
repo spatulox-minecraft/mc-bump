@@ -122,7 +122,20 @@ emptied and the sync would otherwise wipe every page.
 
 ## Releasing
 
-The pipelines are consumed as `@v1`, a moving tag on the v1 line. A change that
-breaks a mod's existing `.github/mc-bump.yml`, whether a removed key, a changed
-default or a stricter schema, is a v2 and not a v1 move. Mods pin `@v1` precisely
-so their CI does not change under them on a Monday morning.
+The pipelines are consumed as `@v2`, a tag moved by hand on the v2 line. `v1`
+is frozen. A change that breaks a mod's existing `.github/mc-bump.yml`, whether a
+removed key, a changed default or a stricter schema, is a v3 and not a v2 move.
+Mods pin `@v2` precisely so their CI does not change under them on a Monday
+morning.
+
+Moving `@v2` is two things, and both matter. The tag, once the self-test is
+green on `main`:
+
+```bash
+git tag -fa v2 -m "mc-bump v2" <commit>
+git push -f origin v2
+```
+
+And, for a new major, the `mc-bump-ref` default in `ci.yml`, `auto-update.yml`
+and `release.yml`: the reusable workflows check mc-bump out again at that ref, so
+a caller on `@v3` with a `v2` default would run the v2 scripts.

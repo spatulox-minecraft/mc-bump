@@ -18,7 +18,7 @@ on:
     inputs:
       mc-bump-ref:
         type: string
-        default: v1
+        default: v2
         required: false
       minecraft-version:
         description: Force a specific Minecraft version. Empty = latest version in minecraft.channels.

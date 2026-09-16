@@ -20,7 +20,7 @@ cost a toolchain.
 
 ## `ci`
 
-`spatulox-minecraft/mc-bump/.github/workflows/ci.yml@v1`
+`spatulox-minecraft/mc-bump/.github/workflows/ci.yml@v2`
 
 Three independent kinds of test, three jobs, so a red one names itself.
 
@@ -35,7 +35,7 @@ config ──┬── unit-tests      pure JVM logic, seconds
 
 | Input | Default | |
 |---|---|---|
-| `mc-bump-ref` | `v1` | Which mc-bump to run. Only worth changing to test mc-bump itself from a branch. |
+| `mc-bump-ref` | `v2` | Which mc-bump to run. Only worth changing to test mc-bump itself from a branch. |
 
 ### `unit-tests`
 
@@ -103,7 +103,7 @@ permissions:
 
 ## `auto-update`
 
-`spatulox-minecraft/mc-bump/.github/workflows/auto-update.yml@v1`
+`spatulox-minecraft/mc-bump/.github/workflows/auto-update.yml@v2`
 
 Detects a new Minecraft release, resolves the dependencies, proves your mod on
 **every version the new range claims**, and opens a pull request.
@@ -116,7 +116,7 @@ whole matrix after each dependency bump.
 
 | Input | Type | Default | |
 |---|---|---|---|
-| `mc-bump-ref` | string | `v1` | |
+| `mc-bump-ref` | string | `v2` | |
 | `minecraft-version` | string | `""` | Force a version. Empty means the latest Mojang version in `minecraft.channels`. |
 | `force` | boolean | `false` | Continue even if the repo is already on that version. |
 
@@ -170,7 +170,7 @@ over the same branch, and cancelling one mid-matrix leaves a half-written repo.
 
 ## `release`
 
-`spatulox-minecraft/mc-bump/.github/workflows/release.yml@v1`
+`spatulox-minecraft/mc-bump/.github/workflows/release.yml@v2`
 
 Publishes to each configured store, then tags.
 
@@ -183,7 +183,7 @@ config ── check ── matrix ──┬── publish-modrinth ──┬─�
 
 | Input | Type | Default | |
 |---|---|---|---|
-| `mc-bump-ref` | string | `v1` | |
+| `mc-bump-ref` | string | `v2` | |
 | `dry-run` | boolean | `false` | Everything except the uploads and the tag. |
 
 | Secret | Required |

@@ -22,7 +22,7 @@ python3 $MCB/scripts/mc-bump.py --list-test-versions
 They are also exposed as a composite action (`action.yml` at the repo root):
 
 ```yaml
-- uses: spatulox-minecraft/mc-bump@v1
+- uses: spatulox-minecraft/mc-bump@v2
   with: { command: test-matrix.py }
 ```
 
