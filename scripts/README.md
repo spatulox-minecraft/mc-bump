@@ -47,7 +47,7 @@ is set, and `--json` prints the same dict on stdout.
 
 Other flags: `--dry-run` (show, write nothing), `--force` (reapply the version
 already in the repo), `--buildtool`/`--loom VERSION` (pin the build plugin
-instead of resolving the latest stable). The five action modes are mutually
+instead of moving it only when the target needs a newer line). The five action modes are mutually
 exclusive, and `--run-tests` refuses `--dry-run`/`--json`.
 
 Exit codes: `0` success or already up to date · `1` error or failed tests · `2`

@@ -215,6 +215,30 @@ class MatrixStatusTest(unittest.TestCase):
             self.assertIn("not found", blocks[0].log)
 
 
+class PrBodyToolchainTest(unittest.TestCase):
+    FIELDS = dict(
+        mod_id="my-mod", minecraft="26.2", previous="26.1.2", loader_name="fabric-loader",
+        loader_version="0.19.3", api_name="fabric-api", api_version="0.155.2",
+        available_loader="0.19.3", available_api="0.155.2", buildtool_name="loom",
+        buildtool_version="1.17.18", java="25", mod_version="26.2-1.1.0",
+        compat_range="=26.2", tests_passed=True, blocks=[], escalation="",
+        run_url="https://example.invalid/run", workflow_file="auto-update.yml",
+    )
+
+    def test_the_toolchain_rows_say_why_they_moved_or_not(self):
+        body = report.pr_body(
+            buildtool_note="Minecraft 26.2 needs 1.17",
+            gradle_version="9.5.1",
+            gradle_note="9.3.0 -> 9.5.1, Minecraft 26.2 needs Gradle 9.5.1",
+            **self.FIELDS,
+        )
+        self.assertIn("build plugin, Minecraft 26.2 needs 1.17", body)
+        self.assertIn("| Gradle wrapper | `9.5.1` | 9.3.0 -> 9.5.1", body)
+
+    def test_no_wrapper_means_no_gradle_row(self):
+        self.assertNotIn("Gradle wrapper", report.pr_body(**self.FIELDS))
+
+
 class EscalationTest(unittest.TestCase):
     def test_no_escalation_renders_nothing(self):
         self.assertEqual(report.escalation_section(""), "")

@@ -37,11 +37,26 @@ class Resolved:
     loader: str | None = None
     api: str | None = None
     buildtool: str | None = None
+    #: the Gradle wrapper version the build plugin needs, None without a wrapper
+    gradle: str | None = None
     extra: dict[str, str] = field(default_factory=dict)
 
     @property
     def usable(self) -> bool:
         return bool(self.loader and self.api)
+
+
+@dataclass(frozen=True)
+class BuildEnv:
+    """What the mod builds WITH today: its build plugin, its Gradle wrapper, Java.
+
+    The toolchain only moves when the target Minecraft version needs more than
+    this. None means unknown.
+    """
+
+    buildtool: str | None = None
+    gradle: str | None = None
+    java: int | None = None
 
 
 @dataclass(frozen=True)
@@ -63,15 +78,24 @@ class Loader(ABC):
 
     # -- resolution --------------------------------------------------------
     @abstractmethod
-    def resolve(self, minecraft_version: str, pin_buildtool: str | None = None) -> Resolved:
+    def resolve(
+        self,
+        minecraft_version: str,
+        pin_buildtool: str | None = None,
+        env: BuildEnv = BuildEnv(),
+    ) -> Resolved:
         """Everything upstream publishes for this Minecraft version.
 
         Never raises for "not published yet": that is `Resolved.usable == False`,
-        which the caller reports as a normal, retry-next-week outcome.
+        which the caller reports as a normal, retry-next-week outcome. Does raise
+        when the toolchain the target needs cannot be built with: that one needs
+        a human.
         """
 
     @abstractmethod
-    def resolve_one(self, role: str, minecraft_version: str) -> str | None:
+    def resolve_one(
+        self, role: str, minecraft_version: str, env: BuildEnv = BuildEnv()
+    ) -> str | None:
         """A single role, for the escalation ladder. role in gradle_keys."""
 
     @abstractmethod
