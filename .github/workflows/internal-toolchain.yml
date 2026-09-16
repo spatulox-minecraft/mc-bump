@@ -1,0 +1,104 @@
+name: "Internal: refresh the toolchain table"
+
+# lib/loaders/fabric_toolchain.json says which fabric-loom line and which Gradle
+# each Minecraft version needs, read from Fabric's example mod. Mods pinned to
+# @v2 or @v1 only see a new Minecraft version in it once their tag moves, so this
+# refreshes the table on both release lines and moves each tag along.
+#
+# A tag only follows when it was already on its branch head: a refresh must not
+# ship commits nobody released yet. Otherwise the table is committed and the
+# summary says the tag is waiting for a manual move.
+#
+# Not one of the three reusable pipelines. This one is about this repository.
+
+on:
+  schedule:
+    - cron: "0 5 * * 1"   # Monday, after Fabric's weekend releases
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  # Two refreshes racing would force-push a tag over each other.
+  group: toolchain-refresh
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    name: Refresh ${{ matrix.branch }} (${{ matrix.tag }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        include:
+          - branch: main
+            tag: v2
+          - branch: release/v1
+            tag: v1
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ matrix.branch }}
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - run: python3 -m pip install --quiet --disable-pip-version-check pyyaml
+
+      - name: Regenerate the table
+        id: refresh
+        env:
+          BRANCH: ${{ matrix.branch }}
+        run: |
+          set -euo pipefail
+          python3 scripts/refresh-toolchain.py
+          if git diff --quiet -- lib/loaders/fabric_toolchain.json; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "### $BRANCH: toolchain table up to date" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            git --no-pager diff -- lib/loaders/fabric_toolchain.json
+          fi
+
+      # Pushed with GITHUB_TOKEN, the commit triggers no other workflow, so the
+      # self-test would never see it: the tests run here, before anything moves.
+      - name: Run the tests
+        if: steps.refresh.outputs.changed == 'true'
+        run: python3 -m unittest discover -s tests -t .
+
+      - name: Commit, push, move the tag
+        if: steps.refresh.outputs.changed == 'true'
+        env:
+          BRANCH: ${{ matrix.branch }}
+          TAG: ${{ matrix.tag }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Read before committing: was the tag released from this very head?
+          HEAD_BEFORE="$(git rev-parse HEAD)"
+          TAG_BEFORE="$(git rev-parse -q --verify "refs/tags/$TAG^{commit}" || true)"
+
+          git add lib/loaders/fabric_toolchain.json
+          git commit -m "chore(toolchain): refresh from fabric-example-mod"
+          git push origin "HEAD:refs/heads/$BRANCH"
+
+          if [ "$TAG_BEFORE" = "$HEAD_BEFORE" ]; then
+            git tag -fa "$TAG" -m "mc-bump $TAG"
+            git push -f origin "refs/tags/$TAG"
+            echo "### $BRANCH: table refreshed, \`$TAG\` moved to $(git rev-parse --short HEAD)" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "::warning::$TAG is not on the head of $BRANCH, it was left where it is"
+            {
+              echo "### $BRANCH: table refreshed, \`$TAG\` NOT moved"
+              echo
+              echo "\`$BRANCH\` has commits that \`$TAG\` does not. Release them, then:"
+              echo
+              echo "    git tag -fa $TAG -m \"mc-bump $TAG\" $(git rev-parse --short HEAD) && git push -f origin $TAG"
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
