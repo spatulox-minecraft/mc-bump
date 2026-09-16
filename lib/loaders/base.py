@@ -45,6 +45,20 @@ class Resolved:
 
 
 @dataclass(frozen=True)
+class BuildEnv:
+    """What the mod builds WITH, which the build plugin has to run on.
+
+    The build plugin is the one resolved version constrained by the mod's own
+    tooling rather than by Minecraft: a plugin compiled against a newer Gradle
+    fails before a single task runs. None means unknown, and applies no
+    constraint.
+    """
+
+    gradle: str | None = None
+    java: int | None = None
+
+
+@dataclass(frozen=True)
 class Rung:
     """One step of the escalation ladder, least invasive first."""
 
@@ -63,15 +77,23 @@ class Loader(ABC):
 
     # -- resolution --------------------------------------------------------
     @abstractmethod
-    def resolve(self, minecraft_version: str, pin_buildtool: str | None = None) -> Resolved:
+    def resolve(
+        self,
+        minecraft_version: str,
+        pin_buildtool: str | None = None,
+        env: BuildEnv = BuildEnv(),
+    ) -> Resolved:
         """Everything upstream publishes for this Minecraft version.
 
         Never raises for "not published yet": that is `Resolved.usable == False`,
-        which the caller reports as a normal, retry-next-week outcome.
+        which the caller reports as a normal, retry-next-week outcome. Does raise
+        when no build plugin runs on `env`: that one needs a human.
         """
 
     @abstractmethod
-    def resolve_one(self, role: str, minecraft_version: str) -> str | None:
+    def resolve_one(
+        self, role: str, minecraft_version: str, env: BuildEnv = BuildEnv()
+    ) -> str | None:
         """A single role, for the escalation ladder. role in gradle_keys."""
 
     @abstractmethod

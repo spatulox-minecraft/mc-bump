@@ -50,6 +50,9 @@ outputs:
   stores:
     description: Comma separated stores to publish to
     value: ${{ steps.config.outputs.stores }}
+  release_channels:
+    description: Comma separated Minecraft channels a release may publish
+    value: ${{ steps.config.outputs.release_channels }}
   branch_prefix:
     description: Prefix of the branches the auto-update opens
     value: ${{ steps.config.outputs.branch_prefix }}
@@ -74,6 +77,9 @@ outputs:
   minecraft:
     description: Minecraft version in gradle.properties
     value: ${{ steps.gradle.outputs.minecraft }}
+  minecraft_channel:
+    description: Channel of that Minecraft version (release, rc, pre, snapshot)
+    value: ${{ steps.gradle.outputs.minecraft_channel }}
   mod_version:
     description: mod_version in gradle.properties
     value: ${{ steps.gradle.outputs.mod_version }}
@@ -108,9 +114,11 @@ runs:
         prop() { sed -n "s/^$1=//p" gradle.properties | head -n 1 | tr -d '[:space:]'; }
 
         MOD_VERSION="$(prop mod_version)"
+        MC="$(prop minecraft_version)"
         {
           echo "java=$(prop java_version)"
-          echo "minecraft=$(prop minecraft_version)"
+          echo "minecraft=$MC"
+          echo "minecraft_channel=$(PYTHONPATH=.mc-bump python3 -m lib.config --channel "$MC")"
           echo "mod_version=$MOD_VERSION"
         } >> "$GITHUB_OUTPUT"
 

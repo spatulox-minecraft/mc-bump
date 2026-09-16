@@ -61,6 +61,33 @@ class UpdateGradlePropertiesTest(ModRepoTestCase):
         self.assertEqual(self.properties_file.read_text(encoding="utf-8"), before)
 
 
+class ReleaseCandidateTest(ModRepoTestCase):
+    """A candidate goes through the same path as a release, pinned exactly."""
+
+    def test_a_candidate_resets_supported_and_is_pinned(self):
+        applied = update.update_gradle_properties(
+            self.project, "26.2-rc-1", "1.17.18", 25, dry_run=False, log=SILENT
+        )
+        self.assertEqual(applied.supported, [])
+        self.assertEqual(applied.mod_version, "26.2-rc-1-1.1.0")
+        self.assertEqual(update.list_test_versions(self.project), ["26.2-rc-1"])
+
+        version, supported, new_range, _ = update.mark_supported(self.project, dry_run=False)
+        self.assertEqual((version, supported), ("26.2-rc-1", ["26.2-rc-1"]))
+        self.assertEqual(new_range, "=26.2-rc.1")
+        self.assertEqual(self.depends("minecraft"), "=26.2-rc.1")
+
+    def test_the_release_after_a_candidate_starts_its_own_list(self):
+        self.set_prop("minecraft_version", "26.2-rc-1")
+        self.set_prop("supported_minecraft_versions", "26.2-rc-1")
+        self.set_prop("mod_version", "26.2-rc-1-1.1.0")
+        applied = update.update_gradle_properties(
+            self.project, "26.2", "1.17.18", 25, dry_run=False, log=SILENT
+        )
+        self.assertEqual(applied.supported, [])
+        self.assertEqual(applied.mod_version, "26.2-1.1.0")
+
+
 class CompatRangeTest(ModRepoTestCase):
     """The bounds are generic; only their rendering belongs to the loader."""
 

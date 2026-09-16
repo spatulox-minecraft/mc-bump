@@ -5,7 +5,7 @@ The escape hatch. For the full pipelines use the
 repository checked out in the workspace, so you can build a pipeline of your own.
 
 ```yaml
-- uses: spatulox-minecraft/mc-bump@v1
+- uses: spatulox-minecraft/mc-bump@v2
   with:
     command: test-matrix.py
 ```
@@ -54,7 +54,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v5
 
       - run: chmod +x gradlew
-      - uses: spatulox-minecraft/mc-bump@v1
+      - uses: spatulox-minecraft/mc-bump@v2
         with:
           command: headless-server-test.py
 
@@ -68,7 +68,7 @@ jobs:
 ### Restrict the matrix to one series
 
 ```yaml
-- uses: spatulox-minecraft/mc-bump@v1
+- uses: spatulox-minecraft/mc-bump@v2
   with:
     command: test-matrix.py
     args: --minecraft 26.1 26.1.1
@@ -77,7 +77,7 @@ jobs:
 ### A dry-run update, as a scheduled report
 
 ```yaml
-- uses: spatulox-minecraft/mc-bump@v1
+- uses: spatulox-minecraft/mc-bump@v2
   with:
     command: mc-bump.py
     args: --dry-run
@@ -86,7 +86,7 @@ jobs:
 ### A mod in a subdirectory
 
 ```yaml
-- uses: spatulox-minecraft/mc-bump@v1
+- uses: spatulox-minecraft/mc-bump@v2
   with:
     command: test-matrix.py
     working-directory: mods/my-mod
@@ -101,7 +101,7 @@ Every environment variable the scripts read still applies. Set them with `env:` 
 the step:
 
 ```yaml
-- uses: spatulox-minecraft/mc-bump@v1
+- uses: spatulox-minecraft/mc-bump@v2
   env:
     BOOT_TIMEOUT: "1200"
     LOG: server-test-26.1.log

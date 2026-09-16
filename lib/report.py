@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .common import Failure
+from .versions import channel_of
 
 #: Most severe first. A build failure explains a server failure, which explains a
 #: gametest failure, so the reader should meet them in that order.
@@ -309,6 +310,7 @@ def pr_body(
     run_url: str,
     workflow_file: str,
     log_tail: int = 100,
+    buildtool_note: str = "",
 ) -> str:
     def frozen_note(in_use: str, available: str) -> str:
         # "frozen" is the normal case and worth saying out loud, so nobody reads
@@ -334,13 +336,27 @@ def pr_body(
         f"Automatic update of **{mod_id}** to **Minecraft `{minecraft}`** "
         f"(previous: `{previous}`).",
         verdict,
+    ]
+
+    channel = channel_of(minecraft)
+    if channel != "release":
+        # A green matrix on a snapshot is worth a PR, not a release: say which of
+        # the two merging leads to, since it depends on release.channels.
+        sections.append(
+            f"> [!WARNING]\n"
+            f"> Minecraft `{minecraft}` is a **{channel}**, not a release. Merging "
+            f"only publishes it when `{channel}` is listed in `release.channels`."
+        )
+
+    sections += [
         "## Resolved versions\n\n"
         "| | version | |\n"
         "|---|---|---|\n"
         f"| Minecraft | `{minecraft}` | the only thing an update moves |\n"
         f"| {loader_name} | `{loader_version}` | {frozen_note(loader_version, available_loader)} |\n"
         f"| {api_name} | `{api_version}` | {frozen_note(api_version, available_api)} |\n"
-        f"| {buildtool_name} | `{buildtool_version}` | build plugin, follows the latest stable |\n"
+        f"| {buildtool_name} | `{buildtool_version}` | build plugin, "
+        f"{buildtool_note or 'follows the latest stable'} |\n"
         f"| Java | `{java}` | from the Mojang manifest |\n"
         f"| `mod_version` | `{mod_version}` | |\n"
         f"| compatibility range | {compat} | |",

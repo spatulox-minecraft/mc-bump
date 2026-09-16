@@ -31,8 +31,39 @@ the old series; the new one starts from nothing and earns its versions back one
 green matrix at a time.
 
 Versions are ordered **numerically**, not lexically, so `26.1.10` sorts after
-`26.1.9`. A non-numeric version such as a snapshot is pinned exactly rather than
-folded into a range.
+`26.1.9`.
+
+## Release candidates and snapshots
+
+Only followed when [`minecraft.channels`](Configuration#minecraft) asks for them.
+A non-release is **its own series** and is pinned exactly, never folded into a
+range:
+
+| `minecraft_version` | `supported_minecraft_versions` | range | jar |
+|---|---|---|---|
+| `26.2-snapshot-3` | `26.2-snapshot-3` | `=26.2-alpha.3` | `26.2-snapshot-3-1.1.0` |
+| `26.2-rc-1` | `26.2-rc-1` (reset) | `=26.2-rc.1` | `26.2-rc-1-1.1.0` |
+| `26.2` | `26.2` (reset) | `=26.2` | `26.2-1.1.0` |
+
+The matrix boots that one version. A jar proven on a candidate promises nothing
+about the release, so the release starts its supported list from nothing, like
+any new series.
+
+The range is written the way **Fabric Loader** reads it, not the way Mojang spells
+the id: the loader rewrites `26.2-rc-1` into `26.2-rc.1` before comparing, and
+would refuse a mod declaring `=26.2-rc-1` on the very server it targets.
+
+| Mojang id | Fabric |
+|---|---|
+| `26.2-snapshot-N` | `26.2-alpha.N` |
+| `26.2-pre-N` | `26.2-pre.N` |
+| `26.2-rc-N` | `26.2-rc.N` |
+| `1.21.11-preN` | `1.21.11-beta.N` |
+| `1.21.11-rcN` | `1.21.11-rc.N` |
+
+A weekly snapshot id (`25w45a`) is **refused**: Fabric maps it onto the release it
+leads to through a table only the loader has, and a wrong guess is a mod the
+loader silently never loads. Mojang stopped shipping that shape with 26.1.
 
 ## The jar name says what was tested
 
@@ -85,6 +116,23 @@ new Minecraft version is not supported.
 An update moves one variable: Minecraft. The build plugin follows, because it is
 a Gradle plugin and does not ship in your jar. Java follows, because Mojang
 dictates it. The loader and its API stay **frozen**.
+
+The build plugin follows **your Gradle wrapper**, never the other way round. Each
+fabric-loom version publishes the Gradle and the Java it needs to run
+(`org.gradle.plugin.api-version` and `org.gradle.jvm.version` in its module
+metadata), and the update takes the newest stable one your
+`gradle/wrapper/gradle-wrapper.properties` and `java_version` can run:
+
+| wrapper | newest Loom | taken | why |
+|---|---|---|---|
+| `9.7.0` | `1.18.1` (needs Gradle 9.7.0) | `1.18.1` | |
+| `9.5.1` | `1.18.1` (needs Gradle 9.7.0) | `1.17.21` | the newest that runs on 9.5.1 |
+
+mc-bump never edits the wrapper: a Gradle upgrade changes how your whole build
+behaves, and that is not a side effect an update should carry. When the Loom
+taken is not the newest, the pull request says so on the build plugin row, which
+is your cue to run `./gradlew wrapper --gradle-version <version>` when it suits
+you.
 
 They only move as a *reaction* to a red matrix:
 

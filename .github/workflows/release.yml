@@ -25,7 +25,7 @@ on:
     inputs:
       mc-bump-ref:
         type: string
-        default: v1
+        default: v2
         required: false
       dry-run:
         description: Do everything except the uploads and the tag.
@@ -54,6 +54,8 @@ jobs:
     outputs:
       release: ${{ steps.setup.outputs.release }}
       stores: ${{ steps.setup.outputs.stores }}
+      release_channels: ${{ steps.setup.outputs.release_channels }}
+      minecraft_channel: ${{ steps.setup.outputs.minecraft_channel }}
       versions: ${{ steps.setup.outputs.versions }}
       java: ${{ steps.setup.outputs.java }}
       tag: ${{ steps.setup.outputs.tag }}
@@ -83,6 +85,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       publish: ${{ steps.check.outputs.publish }}
+      release_type: ${{ steps.check.outputs.release_type }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -96,6 +99,8 @@ jobs:
           MC: ${{ needs.config.outputs.minecraft }}
           MOD_VERSION: ${{ needs.config.outputs.mod_version }}
           STORES: ${{ needs.config.outputs.stores }}
+          CHANNEL: ${{ needs.config.outputs.minecraft_channel }}
+          RELEASE_CHANNELS: ${{ needs.config.outputs.release_channels }}
           MODRINTH_TOKEN: ${{ secrets.MODRINTH_TOKEN }}
           CURSEFORGE_TOKEN: ${{ secrets.CURSEFORGE_TOKEN }}
         run: |
@@ -108,6 +113,26 @@ jobs:
             echo "### \`$TAG\` is already released, nothing to do." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
+
+          # Following a release candidate or a snapshot is no promise to ship it:
+          # only the channels listed in release.channels are published. Not an
+          # error, the merge is legitimate, there is just nothing to release.
+          case ",$RELEASE_CHANNELS," in
+            *",$CHANNEL,"*) ;;
+            *)
+              echo "publish=false" >> "$GITHUB_OUTPUT"
+              echo "### Minecraft \`$MC\` is a \`$CHANNEL\`, not in release.channels (\`$RELEASE_CHANNELS\`): nothing published." >> "$GITHUB_STEP_SUMMARY"
+              exit 0
+              ;;
+          esac
+
+          # What the stores label the upload as. The build script reads it, see
+          # the Getting Started page.
+          case "$CHANNEL" in
+            release)  RELEASE_TYPE=release ;;
+            rc|pre)   RELEASE_TYPE=beta ;;
+            *)        RELEASE_TYPE=alpha ;;
+          esac
 
           # Merging a DRAFT pull request (the matrix failed) leaves
           # minecraft_version bumped while the revert restored the previous,
@@ -138,12 +163,14 @@ jobs:
           fi
 
           echo "publish=true" >> "$GITHUB_OUTPUT"
+          echo "release_type=$RELEASE_TYPE" >> "$GITHUB_OUTPUT"
           {
             echo "### Releasing \`$TAG\` :rocket:"
             echo
             echo "| | |"
             echo "|---|---|"
-            echo "| Minecraft | \`$MC\` |"
+            echo "| Minecraft | \`$MC\` ($CHANNEL) |"
+            echo "| release type | \`$RELEASE_TYPE\` |"
             echo "| announced | \`$SUPPORTED\` |"
             echo "| stores | \`$STORES\` |"
             echo "| dry run | \`${{ inputs.dry-run }}\` |"
@@ -272,7 +299,7 @@ jobs:
           MODRINTH_TOKEN: ${{ secrets.MODRINTH_TOKEN }}
         run: |
           chmod +x gradlew
-          ./gradlew modrinth --stacktrace
+          ./gradlew modrinth "-Prelease_type=${{ needs.check.outputs.release_type }}" --stacktrace
 
       - name: Build only (dry run)
         if: steps.marker.outputs.skip != 'true' && inputs.dry-run == true
@@ -333,7 +360,7 @@ jobs:
           CURSEFORGE_TOKEN: ${{ secrets.CURSEFORGE_TOKEN }}
         run: |
           chmod +x gradlew
-          ./gradlew publishCurseForge --stacktrace
+          ./gradlew publishCurseForge "-Prelease_type=${{ needs.check.outputs.release_type }}" --stacktrace
 
       - name: Build only (dry run)
         if: steps.marker.outputs.skip != 'true' && inputs.dry-run == true
@@ -437,6 +464,9 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       TAG: ${{ needs.config.outputs.tag }}
       DRY_RUN: ${{ inputs.dry-run }}
+      # From config, not check: a replay finds the tag already there, and check
+      # then says nothing about the release type.
+      CHANNEL: ${{ needs.config.outputs.minecraft_channel }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -558,8 +588,13 @@ jobs:
 
           # --verify-tag: gh would otherwise create the tag itself, and in this
           # pipeline a tag never precedes a successful publication.
+          # Anything built against a release candidate or a snapshot is a
+          # pre-release, whatever the mod part of the version says.
+          PRERELEASE=()
+          if [ "$CHANNEL" != "release" ]; then PRERELEASE=(--prerelease); fi
+
           gh release create "$TAG" --verify-tag --title "$TAG" \
-            --notes-file notes.md "${JARS[@]}"
+            ${PRERELEASE[@]+"${PRERELEASE[@]}"} --notes-file notes.md "${JARS[@]}"
 
           case " ${JARS[*]} " in
             *-sources.jar*) ;;

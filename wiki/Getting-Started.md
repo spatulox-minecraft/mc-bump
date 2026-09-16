@@ -19,7 +19,7 @@ These keys are read, and some are rewritten by an update.
 | `java_version` | ✅ | ✅ | derived from the Minecraft version, via the Mojang manifest |
 | `loader_version` | ✅ | frozen¹ | `fabricloader` |
 | `fabric_api_version` | ✅ | frozen¹ | Fabric API |
-| `loom_version` | ✅ | ✅ | the build plugin follows, it does not ship in the jar |
+| `loom_version` | ✅ | ✅ | the build plugin follows, it does not ship in the jar: the newest your Gradle wrapper can run |
 | `archives_base_name` | | | used by your `build.gradle` for the jar name |
 
 ¹ Frozen means an update never touches them. Only the
@@ -82,7 +82,18 @@ dependencies {
 | `publishCurseForge` | the release job | only when `curseforge` is in `release.stores` |
 
 The two publish tasks come from your own build script (`minotaur`,
-`cf-gradle-plugin`, and so on). mc-bump only calls them. No task backs `github`
+`cf-gradle-plugin`, and so on). mc-bump only calls them, with
+`-Prelease_type=release|beta|alpha` derived from the Minecraft channel. Read it if
+you publish release candidates or snapshots
+([`release.channels`](Configuration#publishing-a-release-candidate-or-a-snapshot)):
+
+```groovy
+modrinth {
+    versionType = project.findProperty("release_type") ?: "release"
+}
+```
+
+No task backs `github`
 in `release.stores`: the release job attaches the jars `build` already produced.
 
 ### `fabric.mod.json`
@@ -135,7 +146,7 @@ concurrency:
   cancel-in-progress: true
 jobs:
   ci:
-    uses: spatulox-minecraft/mc-bump/.github/workflows/ci.yml@v1
+    uses: spatulox-minecraft/mc-bump/.github/workflows/ci.yml@v2
     secrets: inherit
 ```
 
@@ -149,7 +160,7 @@ on:
   workflow_dispatch:
     inputs:
       minecraft-version:
-        description: Force a specific Minecraft version. Empty = latest release.
+        description: Force a specific Minecraft version. Empty = latest version in minecraft.channels.
         type: string
       force:
         description: Continue even if the repo is already on that version.
@@ -161,7 +172,7 @@ permissions:
   issues: write
 jobs:
   update:
-    uses: spatulox-minecraft/mc-bump/.github/workflows/auto-update.yml@v1
+    uses: spatulox-minecraft/mc-bump/.github/workflows/auto-update.yml@v2
     with:
       minecraft-version: ${{ inputs['minecraft-version'] }}
       force: ${{ inputs.force == true }}
@@ -192,7 +203,7 @@ permissions:
   issues: write
 jobs:
   release:
-    uses: spatulox-minecraft/mc-bump/.github/workflows/release.yml@v1
+    uses: spatulox-minecraft/mc-bump/.github/workflows/release.yml@v2
     with:
       dry-run: ${{ inputs.dry-run == true }}
     secrets: inherit
@@ -233,8 +244,10 @@ If the second one is green, your CI will be too. See [CLI](CLI) for the rest.
 
 ## Pinning a version
 
-`@v1` is a moving tag: it follows the v1 line. Pin a commit SHA instead if you
-want the pipeline to change only when you say so.
+`@v2` is a tag moved by hand to each mc-bump release of the v2 line. Pin a
+commit SHA instead if you want the pipeline to change only when you say so.
+`@v1` still works and stays where it is, without release channels or the Loom
+selection.
 
 > **Note.** A pull request opened by the auto-update with the default
 > `GITHUB_TOKEN` does **not** trigger `pull_request` workflows, so your `ci.yml`

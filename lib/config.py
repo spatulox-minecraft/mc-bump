@@ -34,6 +34,7 @@ from .github import output as github_output
 from .gradle import ModPaths
 from .loaders import LOADERS, Loader, get_loader
 from .patterns import COMMENT_STYLES
+from .versions import CHANNELS, channel_of
 
 CONFIG_PATH = ".github/mc-bump.yml"
 
@@ -183,6 +184,10 @@ SCHEMA: dict = {
         "metadata": Field(str, required=True),
         "mixins": Field(str, default=""),
     },
+    "minecraft": {
+        # What the auto-update follows. Only releases unless the mod asks.
+        "channels": Field(list, default=["release"]),
+    },
     "workflows": {
         "ci": Field(bool, default=True),
         "auto-update": Field(bool, default=True),
@@ -240,6 +245,8 @@ SCHEMA: dict = {
         "stores": Field(
             list, default=["modrinth", "curseforge"]
         ),
+        # What may be published. Following a snapshot is no promise to ship it.
+        "channels": Field(list, default=["release"]),
         "branch-prefix": Field(str, default="chore/mc-"),
         "artifact-retention-days": Field(int, default=30),
     },
@@ -341,6 +348,27 @@ class Project:
     def tag_for(self, mod_version: str) -> str:
         return self.tag_format.format(version=mod_version)
 
+    @property
+    def update_channels(self) -> list[str]:
+        return self.raw["minecraft"]["channels"]
+
+    @property
+    def release_channels(self) -> list[str]:
+        return self.raw["release"]["channels"]
+
+
+def _check_channels(path: str, channels: list[str]) -> None:
+    # An empty list would follow nothing and publish nothing, while looking like
+    # a working config.
+    if not channels:
+        raise Failure(f"{path}: expected at least one of {', '.join(CHANNELS)}")
+    unknown = [c for c in channels if c not in CHANNELS]
+    if unknown:
+        raise Failure(
+            f"{path}: unknown channel(s) {', '.join(unknown)}. "
+            f"Known channels: {', '.join(CHANNELS)}."
+        )
+
 
 def load(root: Path | None = None) -> Project:
     root = find_root() if root is None else Path(root).resolve()
@@ -360,6 +388,12 @@ def load(root: Path | None = None) -> Project:
             f"release.stores: unknown store(s) {', '.join(unknown)}. "
             f"Known stores: {', '.join(KNOWN_STORES)}."
         )
+
+    for path, channels in (
+        ("minecraft.channels", raw["minecraft"]["channels"]),
+        ("release.channels", raw["release"]["channels"]),
+    ):
+        _check_channels(path, channels)
 
     project = Project(root=root, raw=raw, loader=get_loader(raw["loader"]))
     # Fail here rather than in the middle of a rewrite: an id the loader cannot
@@ -399,6 +433,7 @@ def export_github_output(project: Project) -> str:
         "matrix": raw["tests"]["matrix"]["enabled"],
         "matrix_parallel": raw["tests"]["matrix"]["parallel"],
         "stores": raw["release"]["stores"],
+        "release_channels": raw["release"]["channels"],
         "branch_prefix": raw["release"]["branch-prefix"],
         "retention_days": raw["release"]["artifact-retention-days"],
         "assignee": raw["notify"]["assignee"],
@@ -430,8 +465,18 @@ def main(argv: list[str] | None = None) -> int:
     group.add_argument(
         "--tag", metavar="VERSION", help="release tag for this mod_version"
     )
+    group.add_argument(
+        "--channel",
+        metavar="MINECRAFT",
+        help="channel of this Minecraft version (release, rc, pre, snapshot)",
+    )
     parser.add_argument("--root", help="mod repository (default: walk up from the cwd)")
     args = parser.parse_args(argv)
+
+    if args.channel:
+        # No config needed: the channel is read from the id alone.
+        print(channel_of(args.channel))
+        return 0
 
     project = load(Path(args.root) if args.root else None)
 

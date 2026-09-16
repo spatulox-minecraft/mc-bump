@@ -205,6 +205,30 @@ know that Minecraft version", and it becomes exit code `2`.
 The Fabric maven metadata listed nothing purely numeric. Pin one yourself with
 `--loom VERSION`, or `--buildtool VERSION`.
 
+### `no stable fabric-loom among the 15 newest runs on this build: 1.18.1 requires Gradle >= 9.7.0 but the wrapper is on 8.14. ...`
+
+Your Gradle wrapper is older than every recent fabric-loom supports. mc-bump
+refuses before writing anything, rather than leaving a build that fails while
+resolving its plugins. Upgrade the wrapper with the command in the message, and
+commit `gradle/wrapper/`:
+
+```bash
+./gradlew wrapper --gradle-version 9.7.0
+```
+
+Or pin an older Loom with `--loom VERSION`.
+
+### `fabric-loom 1.18.1 requires Gradle >= 9.7.0 but the wrapper is on 9.5.1`
+
+The Loom given to `--loom` cannot run on your wrapper. Pick an older one, or
+upgrade the wrapper as above.
+
+### The pull request says the build plugin is not the newest
+
+Not an error: a newer fabric-loom exists, and your Gradle wrapper cannot run it.
+The row names the Gradle it needs. Upgrade the wrapper when it suits you, and the
+next update takes it.
+
 ---
 
 ## GitHub Actions

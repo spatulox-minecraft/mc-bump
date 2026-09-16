@@ -38,7 +38,8 @@ PYTHONPATH=$MCB python3 -m lib.config --json           # the resolved config
 ## `mc-bump.py`, resolve an update and apply it
 
 Resolves what upstream publishes for a target Minecraft version, the latest
-Mojang release by default, writes `gradle.properties` and `fabric.mod.json`, and
+Mojang version in `minecraft.channels` by default (releases only, unless the
+config lists more), writes `gradle.properties` and `fabric.mod.json`, and
 with `--run-tests` proves it.
 
 ```bash
@@ -62,11 +63,11 @@ Mutually exclusive. Without one, it updates and stops.
 
 | Flag | |
 |---|---|
-| `VERSION` | Target Minecraft version. Defaults to the latest Mojang release. |
+| `VERSION` | Target Minecraft version, whatever its channel. Defaults to the latest Mojang version in `minecraft.channels`. |
 | `--dry-run` | Show the changes, write nothing. Refused with `--run-tests`. |
 | `--json` | JSON on stdout, nothing else. Refused with `--run-tests`. |
 | `--force` | Reapply the version already in the repo. |
-| `--buildtool VERSION` or `--loom VERSION` | Pin the build plugin instead of resolving the latest stable one. An old Minecraft version may need an older fabric-loom. |
+| `--buildtool VERSION` or `--loom VERSION` | Pin the build plugin instead of resolving the newest stable one your Gradle wrapper can run. An old Minecraft version may need an older fabric-loom. A pin the wrapper cannot run is refused up front. |
 | `--root PATH` | Your mod's repository. |
 
 ### Exit codes
@@ -186,6 +187,7 @@ it.
 PYTHONPATH=$MCB python3 -m lib.config --json            # everything, resolved
 PYTHONPATH=$MCB python3 -m lib.config --github-output   # what a workflow branches on
 PYTHONPATH=$MCB python3 -m lib.config --tag 26.2-1.1.0  # the release tag
+PYTHONPATH=$MCB python3 -m lib.config --channel 26.2-rc-1  # rc: release, rc, pre or snapshot
 ```
 
 Run it after editing `.github/mc-bump.yml`. Validation

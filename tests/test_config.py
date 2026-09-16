@@ -26,6 +26,8 @@ class LoadTest(ModRepoTestCase):
         self.assertEqual(raw["tests"]["server"]["boot-timeout"], 900)
         self.assertEqual(raw["tests"]["unit"]["source"], "src/test/java")
         self.assertEqual(raw["release"]["stores"], ["modrinth", "curseforge"])
+        self.assertEqual(raw["minecraft"]["channels"], ["release"])
+        self.assertEqual(raw["release"]["channels"], ["release"])
         self.assertTrue(raw["workflows"]["ci"])
         self.assertFalse(raw["workflows"]["gametest"]["enabled"])
 
@@ -135,6 +137,27 @@ class ValidationTest(unittest.TestCase):
             "github",
         )
 
+    def test_channels_listed_are_the_only_ones(self):
+        project = self._load(
+            CONFIG
+            + "\nminecraft:\n  channels: [release, rc]\n"
+            + "release:\n  channels: [release, rc, pre]\n"
+        )
+        self.assertEqual(project.update_channels, ["release", "rc"])
+        self.assertEqual(project.release_channels, ["release", "rc", "pre"])
+
+    def test_an_unknown_channel(self):
+        self._rejects(
+            CONFIG + "\nminecraft:\n  channels: [release, beta]\n",
+            "minecraft.channels",
+            "beta",
+            "snapshot",
+        )
+
+    def test_an_empty_channel_list(self):
+        """It would follow nothing while looking like a working config."""
+        self._rejects(CONFIG + "\nrelease:\n  channels: []\n", "release.channels")
+
     def test_a_multiline_value_is_refused_by_name(self):
         """A block scalar here used to inject a second line into $GITHUB_OUTPUT,
         where GitHub keeps the last occurrence of a key: `notify.label` could
@@ -173,6 +196,7 @@ class ExportTest(ModRepoTestCase):
         self.assertEqual(pairs["gametest"], "false")
         self.assertEqual(pairs["stores"], "modrinth,curseforge")
         self.assertEqual(pairs["assignee"], "Spatulox")
+        self.assertEqual(pairs["release_channels"], "release")
 
 
 class TagCliTest(ModRepoTestCase):
@@ -183,6 +207,12 @@ class TagCliTest(ModRepoTestCase):
         with contextlib.redirect_stdout(buffer):
             config_module.main(["--tag", "26.2-1.1.0", "--root", str(self.root)])
         self.assertEqual(buffer.getvalue().strip(), "v26.2-1.1.0")
+
+    def test_the_channel_flag_needs_no_config(self):
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            config_module.main(["--channel", "26.2-rc-1", "--root", "/nonexistent"])
+        self.assertEqual(buffer.getvalue().strip(), "rc")
 
     def test_a_quote_in_the_version_is_data_not_code(self):
         buffer = io.StringIO()

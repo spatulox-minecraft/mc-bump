@@ -10,7 +10,7 @@ Built for Fabric.
 # .github/workflows/ci.yml, in your mod
 jobs:
   ci:
-    uses: spatulox-minecraft/mc-bump/.github/workflows/ci.yml@v1
+    uses: spatulox-minecraft/mc-bump/.github/workflows/ci.yml@v2
     secrets: inherit
 ```
 

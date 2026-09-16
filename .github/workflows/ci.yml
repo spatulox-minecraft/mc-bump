@@ -4,7 +4,7 @@ name: mc-bump CI
 #
 #   jobs:
 #     ci:
-#       uses: spatulox-minecraft/mc-bump/.github/workflows/ci.yml@v1
+#       uses: spatulox-minecraft/mc-bump/.github/workflows/ci.yml@v2
 #       secrets: inherit
 #
 # Three independent kinds of test, three jobs, so a red one names itself:
@@ -26,7 +26,7 @@ on:
           branch; a nested `uses:` cannot take an expression, so this is passed to
           actions/checkout instead.
         type: string
-        default: v1
+        default: v2
         required: false
 
 permissions:

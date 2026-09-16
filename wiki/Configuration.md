@@ -16,6 +16,9 @@ mod:
   metadata: src/main/resources/fabric.mod.json
   mixins: src/main/resources/my-mod.mixins.json    # optional
 
+minecraft:
+  channels: [release]              # release, rc, pre, snapshot
+
 workflows:
   ci: true
   auto-update: true
@@ -48,6 +51,7 @@ tests:
 
 release:
   stores: [modrinth, curseforge]
+  channels: [release]              # which Minecraft channels get published
   branch-prefix: chore/mc-
   artifact-retention-days: 30
 
@@ -100,6 +104,34 @@ PYTHONPATH=../mc-bump python3 -m lib.config --json
 the mods it loaded as an indented tree, and the test anchors on that dash-space
 prefix rather than on the bare id, which also appears in every classpath dump and
 stack trace.
+
+## `minecraft`
+
+| Key | Default | Meaning |
+|---|---|---|
+| `channels` | `[release]` | Which Minecraft versions the auto-update follows. |
+
+The channel is read from the Mojang version id, since Mojang's manifest types
+pre-releases, release candidates and snapshots all as `snapshot`:
+
+| Channel | Example ids |
+|---|---|
+| `release` | `26.2`, `1.21.11` |
+| `rc` | `26.2-rc-1`, `1.21.11-rc1` |
+| `pre` | `26.2-pre-1`, `1.21.11-pre1` |
+| `snapshot` | `26.2-snapshot-1`, `25w45a` |
+
+The auto-update targets the **newest** version, by release time, among the
+channels listed, and **only** those. `[release, rc]` moves to `26.2-rc-1` as soon as
+it is out, then to `26.2` when it ships. `[snapshot]` alone never targets a
+release.
+
+Following a channel does not publish it: that is
+[`release.channels`](#release). An unknown channel, or an empty list, is an
+error.
+
+A version forced through the `minecraft-version` input, or on the command line,
+is targeted whatever its channel.
 
 ## `workflows`
 
@@ -200,6 +232,7 @@ like everything else matched against the log.
 | Key | Default | Meaning |
 |---|---|---|
 | `stores` | `[modrinth, curseforge]` | Where to publish. Known: `modrinth`, `curseforge`, `github`. |
+| `channels` | `[release]` | Which Minecraft channels may be published, see [`minecraft`](#minecraft). |
 | `branch-prefix` | `chore/mc-` | The auto-update branch is `<prefix><minecraft version>`. |
 | `artifact-retention-days` | `30` | How long the logs and reports are kept. |
 
@@ -219,6 +252,33 @@ it.
 release:
   stores: [modrinth, curseforge, github]
 ```
+
+### Publishing a release candidate or a snapshot
+
+By default only a `minecraft_version` in the `release` channel is published.
+Merging an update to `26.2-rc-1` with `channels: [release]` runs the release
+pipeline, which says so in its summary and publishes nothing; the job stays
+green, since there was nothing wrong to report.
+
+List the channel to publish it:
+
+```yaml
+minecraft:
+  channels: [release, rc]
+release:
+  channels: [release, rc]
+```
+
+A published non-release is labelled as such:
+
+| Channel | `-Prelease_type` passed to the upload tasks | GitHub release |
+|---|---|---|
+| `release` | `release` | release |
+| `rc`, `pre` | `beta` | pre-release |
+| `snapshot` | `alpha` | pre-release |
+
+The upload tasks belong to your build script, so reading the property is up to
+it, see [Getting Started](Getting-Started#gradle-tasks).
 
 ## `notify`
 
