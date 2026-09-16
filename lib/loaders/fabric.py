@@ -10,12 +10,14 @@ from __future__ import annotations
 import json
 import re
 import urllib.parse
+from dataclasses import dataclass
+from typing import Callable
 from xml.etree import ElementTree
 
 from ..common import Failure, get_json, http_get
-from ..gradle import ModPaths, read_json, write_json
+from ..gradle import ModPaths, gradle_version_key, read_json, write_json
 from ..versions import parse_version
-from .base import Loader, Resolved, Rung
+from .base import BuildEnv, Loader, Resolved, Rung
 
 FABRIC_META = "https://meta.fabricmc.net/v2/versions"
 MODRINTH_FABRIC_API = "https://api.modrinth.com/v2/project/fabric-api/version"
@@ -31,6 +33,113 @@ MOD_ID_RE = re.compile(r"[a-z][a-z0-9_-]{1,63}")
 # The two id shapes Mojang uses for pre-releases and release candidates.
 DATE_BASED_ID = re.compile(r"(\d+\.\d+(?:\.\d+)?)-(snapshot|pre|rc)-(\d+)")
 LEGACY_PRE_ID = re.compile(r"(\d+\.\d+(?:\.\d+)?)-(pre|rc)(\d+)")
+
+# Gradle Module Metadata of one Loom version: what it needs to run.
+LOOM_MODULE = "https://maven.fabricmc.net/net/fabricmc/fabric-loom/{v}/fabric-loom-{v}.module"
+
+# How far back to look for a Loom the wrapper can run. Each step is one request,
+# and a wrapper that far behind is better told to upgrade than silently served a
+# Loom from a year ago.
+MAX_LOOM_LOOKUPS = 15
+
+
+@dataclass(frozen=True)
+class LoomRequirements:
+    """What a Loom version declares it needs. None: not declared."""
+
+    gradle: str | None = None
+    java: int | None = None
+
+    def gradle_too_old(self, env: BuildEnv) -> bool:
+        return bool(
+            self.gradle
+            and env.gradle
+            and gradle_version_key(self.gradle) > gradle_version_key(env.gradle)
+        )
+
+    def java_too_old(self, env: BuildEnv) -> bool:
+        return bool(self.java and env.java and self.java > env.java)
+
+    def gaps(self, env: BuildEnv) -> list[str]:
+        """Every requirement `env` does not meet, as a readable clause."""
+        out = []
+        if self.gradle_too_old(env):
+            out.append(f"Gradle >= {self.gradle} but the wrapper is on {env.gradle}")
+        if self.java_too_old(env):
+            out.append(f"Java >= {self.java} but java_version is {env.java}")
+        return out
+
+
+@dataclass(frozen=True)
+class LoomChoice:
+    version: str
+    #: why it is not the newest stable, empty when it is
+    note: str = ""
+
+
+def _loom_key(version: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in version.split("."))
+
+
+def pick_loom(
+    stable: list[str],
+    requirements: Callable[[str], LoomRequirements | None],
+    env: BuildEnv,
+    limit: int = MAX_LOOM_LOOKUPS,
+) -> LoomChoice:
+    """The newest stable Loom that runs on the mod's Gradle and Java.
+
+    A version whose requirements cannot be read is skipped, never picked blind:
+    being wrong here is a build that fails before any test, which is exactly the
+    failure this exists to prevent. Without any constraint to check, the newest
+    is taken with no lookup at all.
+    """
+    ordered = sorted(set(stable), key=_loom_key, reverse=True)
+    if not ordered:
+        raise Failure("no stable fabric-loom version found")
+    newest = ordered[0]
+    if env.gradle is None and env.java is None:
+        return LoomChoice(newest)
+
+    newest_needs = requirements(newest)
+    why = (
+        f"{newest} requires {' and '.join(newest_needs.gaps(env))}"
+        if newest_needs is not None
+        else f"the requirements of {newest} could not be read"
+    )
+    for version in ordered[:limit]:
+        needs = newest_needs if version == newest else requirements(version)
+        if needs is None or needs.gaps(env):
+            continue
+        if version == newest:
+            return LoomChoice(version)
+        return LoomChoice(version, note=f"newest that runs on this build; {why}")
+
+    advice = []
+    if newest_needs is not None and newest_needs.gradle_too_old(env):
+        advice.append(f"./gradlew wrapper --gradle-version {newest_needs.gradle}")
+    raise Failure(
+        f"no stable fabric-loom among the {min(limit, len(ordered))} newest runs on "
+        f"this build: {why}. "
+        + (f"Upgrade with {' and '.join(advice)}, " if advice else "")
+        + "or pin a fabric-loom with --loom."
+    )
+
+
+def check_pinned_loom(
+    version: str,
+    requirements: Callable[[str], LoomRequirements | None],
+    env: BuildEnv,
+) -> None:
+    """A pinned Loom is a deliberate choice, but one the wrapper must still run.
+
+    Unreadable requirements let it through: the pin is the escape hatch, and
+    refusing on missing metadata would leave no way out.
+    """
+    needs = requirements(version)
+    gaps = needs.gaps(env) if needs is not None else []
+    if gaps:
+        raise Failure(f"fabric-loom {version} requires {' and '.join(gaps)}")
 
 
 def normalize_minecraft_version(version: str) -> str:
@@ -78,7 +187,12 @@ class FabricLoader(Loader):
     }
 
     # -- resolution --------------------------------------------------------
-    def resolve(self, minecraft_version: str, pin_buildtool: str | None = None) -> Resolved:
+    def resolve(
+        self,
+        minecraft_version: str,
+        pin_buildtool: str | None = None,
+        env: BuildEnv = BuildEnv(),
+    ) -> Resolved:
         loader = self._loader_for(minecraft_version)
         if not loader:
             return Resolved()
@@ -87,21 +201,30 @@ class FabricLoader(Loader):
             return Resolved(loader=loader)
         # Loom is the build plugin, not a Minecraft dependency: Fabric publishes
         # no "which loom builds which Minecraft" mapping, and loom is backward
-        # compatible in practice. So the latest stable is taken, and pin_buildtool
-        # is the escape hatch when an old Minecraft version needs an older loom.
+        # compatible in practice. What it does declare is the Gradle and Java it
+        # runs on, so the newest stable the mod's own build can run is taken, and
+        # pin_buildtool is the escape hatch when an old Minecraft version needs an
+        # older loom.
+        if pin_buildtool:
+            check_pinned_loom(pin_buildtool, self._loom_requirements, env)
+            return Resolved(loader=loader, api=api, buildtool=pin_buildtool)
+        choice = self._loom_for(env)
         return Resolved(
             loader=loader,
             api=api,
-            buildtool=pin_buildtool or self._latest_stable_loom(),
+            buildtool=choice.version,
+            extra={"buildtool_note": choice.note} if choice.note else {},
         )
 
-    def resolve_one(self, role: str, minecraft_version: str) -> str | None:
+    def resolve_one(
+        self, role: str, minecraft_version: str, env: BuildEnv = BuildEnv()
+    ) -> str | None:
         if role == "loader":
             return self._loader_for(minecraft_version)
         if role == "api":
             return self._latest_fabric_api(minecraft_version)
         if role == "buildtool":
-            return self._latest_stable_loom()
+            return self._loom_for(env).version
         raise Failure(f"unknown role '{role}' for the fabric loader")
 
     def escalation_rungs(self) -> list[Rung]:
@@ -149,12 +272,46 @@ class FabricLoader(Loader):
         newest = max(data, key=lambda v: v.get("date_published", ""))
         return newest.get("version_number")
 
-    def _latest_stable_loom(self) -> str:
-        """Latest stable fabric-loom from the Fabric Maven metadata.
+    def _loom_for(self, env: BuildEnv) -> LoomChoice:
+        return pick_loom(self._stable_looms(), self._loom_requirements, env)
+
+    def _loom_requirements(self, version: str) -> LoomRequirements | None:
+        """Read from the Gradle Module Metadata Fabric publishes with each Loom.
+
+        Its runtime variant carries the exact attributes Gradle matches the plugin
+        on: org.gradle.plugin.api-version (1.18.1 -> 9.7.0) and
+        org.gradle.jvm.version (1.18.1 -> 25). A missing or unreadable file is
+        None, which the caller treats as unknown rather than as "no requirement".
+        """
+        url = LOOM_MODULE.format(v=urllib.parse.quote(version))
+        body = http_get(url, allow_status=(404,))
+        try:
+            document = json.loads(body)
+        except json.JSONDecodeError:
+            return None
+        variants = document.get("variants") if isinstance(document, dict) else None
+        runtime = next(
+            (
+                variant.get("attributes") or {}
+                for variant in variants or []
+                if variant.get("name") == "runtimeElements"
+            ),
+            None,
+        )
+        if runtime is None:
+            return None
+        java = runtime.get("org.gradle.jvm.version")
+        return LoomRequirements(
+            gradle=runtime.get("org.gradle.plugin.api-version"),
+            java=java if isinstance(java, int) else None,
+        )
+
+    def _stable_looms(self) -> list[str]:
+        """Every stable fabric-loom from the Fabric Maven metadata.
 
         The metadata lists versions in PUBLICATION order, not version order
-        (1.17.14 comes after 1.18.0-alpha.4), so the list is sorted numerically
-        rather than read from the end. <release> is not used either: nothing stops
+        (1.17.14 comes after 1.18.0-alpha.4), so pick_loom() sorts it numerically
+        rather than reading it from the end. <release> is not used either: nothing stops
         it from pointing at a pre-release, which is not a SNAPSHOT.
         """
         body = http_get(LOOM_METADATA)
@@ -168,9 +325,7 @@ class FabricLoader(Loader):
             for element in root.iter("version")
             if element.text and STABLE_LOOM.match(element.text)
         ]
-        if not stable:
-            raise Failure("no stable fabric-loom version found")
-        return max(stable, key=lambda version: tuple(int(p) for p in version.split(".")))
+        return stable
 
     # -- metadata ----------------------------------------------------------
     def render_range(self, low: str, high: str) -> str:

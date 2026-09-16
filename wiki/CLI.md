@@ -67,7 +67,7 @@ Mutually exclusive. Without one, it updates and stops.
 | `--dry-run` | Show the changes, write nothing. Refused with `--run-tests`. |
 | `--json` | JSON on stdout, nothing else. Refused with `--run-tests`. |
 | `--force` | Reapply the version already in the repo. |
-| `--buildtool VERSION` or `--loom VERSION` | Pin the build plugin instead of resolving the latest stable one. An old Minecraft version may need an older fabric-loom. |
+| `--buildtool VERSION` or `--loom VERSION` | Pin the build plugin instead of resolving the newest stable one your Gradle wrapper can run. An old Minecraft version may need an older fabric-loom. A pin the wrapper cannot run is refused up front. |
 | `--root PATH` | Your mod's repository. |
 
 ### Exit codes

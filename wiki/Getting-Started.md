@@ -19,7 +19,7 @@ These keys are read, and some are rewritten by an update.
 | `java_version` | ✅ | ✅ | derived from the Minecraft version, via the Mojang manifest |
 | `loader_version` | ✅ | frozen¹ | `fabricloader` |
 | `fabric_api_version` | ✅ | frozen¹ | Fabric API |
-| `loom_version` | ✅ | ✅ | the build plugin follows, it does not ship in the jar |
+| `loom_version` | ✅ | ✅ | the build plugin follows, it does not ship in the jar: the newest your Gradle wrapper can run |
 | `archives_base_name` | | | used by your `build.gradle` for the jar name |
 
 ¹ Frozen means an update never touches them. Only the

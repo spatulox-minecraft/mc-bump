@@ -310,6 +310,7 @@ def pr_body(
     run_url: str,
     workflow_file: str,
     log_tail: int = 100,
+    buildtool_note: str = "",
 ) -> str:
     def frozen_note(in_use: str, available: str) -> str:
         # "frozen" is the normal case and worth saying out loud, so nobody reads
@@ -354,7 +355,8 @@ def pr_body(
         f"| Minecraft | `{minecraft}` | the only thing an update moves |\n"
         f"| {loader_name} | `{loader_version}` | {frozen_note(loader_version, available_loader)} |\n"
         f"| {api_name} | `{api_version}` | {frozen_note(api_version, available_api)} |\n"
-        f"| {buildtool_name} | `{buildtool_version}` | build plugin, follows the latest stable |\n"
+        f"| {buildtool_name} | `{buildtool_version}` | build plugin, "
+        f"{buildtool_note or 'follows the latest stable'} |\n"
         f"| Java | `{java}` | from the Mojang manifest |\n"
         f"| `mod_version` | `{mod_version}` | |\n"
         f"| compatibility range | {compat} | |",

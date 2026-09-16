@@ -228,6 +228,13 @@ class PrBodyChannelTest(unittest.TestCase):
     def test_a_release_carries_no_warning(self):
         self.assertNotIn("not a release", report.pr_body(minecraft="26.2", **self.FIELDS))
 
+    def test_the_build_plugin_says_why_it_is_not_the_newest(self):
+        self.assertIn("follows the latest stable", report.pr_body(minecraft="26.2", **self.FIELDS))
+        note = "newest that runs on this build; 1.18.1 requires Gradle >= 9.7.0"
+        body = report.pr_body(minecraft="26.2", buildtool_note=note, **self.FIELDS)
+        self.assertIn(note, body)
+        self.assertNotIn("follows the latest stable", body)
+
     def test_a_candidate_says_merging_may_not_publish(self):
         body = report.pr_body(minecraft="26.2-rc-1", **self.FIELDS)
         self.assertIn("**rc**, not a release", body)

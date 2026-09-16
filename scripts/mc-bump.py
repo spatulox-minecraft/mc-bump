@@ -54,7 +54,8 @@ from lib import config as config_module  # noqa: E402
 from lib import update as update_module  # noqa: E402
 from lib.common import Failure  # noqa: E402
 from lib.github import output as github_output  # noqa: E402
-from lib.gradle import read_property  # noqa: E402
+from lib.gradle import read_property, read_wrapper_gradle_version  # noqa: E402
+from lib.loaders.base import BuildEnv  # noqa: E402
 from lib.matrix import run_with_escalation  # noqa: E402
 from lib.versions import (  # noqa: E402
     channel_of,
@@ -291,6 +292,7 @@ def main() -> int:
         "available_loader_version": None,
         "available_api_version": None,
         "buildtool_version": None,
+        "buildtool_note": "",
         "java_version": None,
         "mod_version": None,
         "minecraft_range": None,
@@ -308,7 +310,18 @@ def main() -> int:
     if target == current and not args.force:
         return stop("up-to-date", "Already up to date. (--force to reapply)", 0)
 
-    resolved = loader.resolve(target, pin_buildtool=args.buildtool)
+    # Before resolving: the build plugin has to run on the Java this update
+    # writes and on the Gradle the mod's wrapper already pins. When Mojang does
+    # not say, java_version is left as is, so that is what the build runs on.
+    java = java_version_for(target)
+    build_java = java
+    current_java = read_property(properties, "java_version") or ""
+    if build_java is None and current_java.isdigit():
+        build_java = int(current_java)
+    gradle = read_wrapper_gradle_version(project.paths)
+    env = BuildEnv(gradle=gradle, java=build_java)
+
+    resolved = loader.resolve(target, pin_buildtool=args.buildtool, env=env)
     result["available_loader_version"] = resolved.loader
     result["available_api_version"] = resolved.api
     if not resolved.usable:
@@ -319,8 +332,6 @@ def main() -> int:
             2,
         )
 
-    java = java_version_for(target)
-
     def frozen(current_value: str | None, available: str) -> str:
         if current_value == available:
             return f"{current_value} (frozen, already the latest)"
@@ -328,7 +339,16 @@ def main() -> int:
 
     log(f"\n  {keys['loader']} = {frozen(frozen_loader, resolved.loader)}")
     log(f"  {keys['api']} = {frozen(frozen_api, resolved.api)}")
-    log(f"  {keys['buildtool']} = {resolved.buildtool}{' (pinned)' if args.buildtool else ''}")
+    buildtool_note = resolved.extra.get("buildtool_note", "")
+    if args.buildtool:
+        buildtool_suffix = " (pinned)"
+    elif buildtool_note:
+        buildtool_suffix = f" ({buildtool_note})"
+    else:
+        buildtool_suffix = ""
+    log(f"  {keys['buildtool']} = {resolved.buildtool}{buildtool_suffix}")
+    if gradle is None:
+        log("  (no Gradle wrapper found: the build plugin is not checked against Gradle)")
     if java is None:
         log("  java_version = (absent from the Mojang manifest, left as is)")
     else:
@@ -368,6 +388,7 @@ def main() -> int:
         {
             "status": "updated",
             "buildtool_version": resolved.buildtool,
+            "buildtool_note": buildtool_note,
             "java_version": java,
             "mod_version": applied.mod_version,
             "supported_minecraft_versions": applied.supported,

@@ -117,6 +117,23 @@ An update moves one variable: Minecraft. The build plugin follows, because it is
 a Gradle plugin and does not ship in your jar. Java follows, because Mojang
 dictates it. The loader and its API stay **frozen**.
 
+The build plugin follows **your Gradle wrapper**, never the other way round. Each
+fabric-loom version publishes the Gradle and the Java it needs to run
+(`org.gradle.plugin.api-version` and `org.gradle.jvm.version` in its module
+metadata), and the update takes the newest stable one your
+`gradle/wrapper/gradle-wrapper.properties` and `java_version` can run:
+
+| wrapper | newest Loom | taken | why |
+|---|---|---|---|
+| `9.7.0` | `1.18.1` (needs Gradle 9.7.0) | `1.18.1` | |
+| `9.5.1` | `1.18.1` (needs Gradle 9.7.0) | `1.17.21` | the newest that runs on 9.5.1 |
+
+mc-bump never edits the wrapper: a Gradle upgrade changes how your whole build
+behaves, and that is not a side effect an update should carry. When the Loom
+taken is not the newest, the pull request says so on the build plugin row, which
+is your cue to run `./gradlew wrapper --gradle-version <version>` when it suits
+you.
+
 They only move as a *reaction* to a red matrix:
 
 ```
