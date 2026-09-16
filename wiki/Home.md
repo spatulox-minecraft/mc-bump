@@ -18,7 +18,8 @@ jobs:
 <summary>@v1</summary>
 
 `@v1` follows Minecraft releases only: no release candidates, no snapshots.
-Existing callers keep working as they are.
+Existing callers keep working as they are. Moving up is described in
+[Migrating](Migrating#from-v1-to-v2).
 
 ```yaml
 jobs:
@@ -40,6 +41,7 @@ jobs:
 | **[Pipelines](Pipelines)** | What `ci`, `auto-update` and `release` actually do, job by job. |
 | **[CLI](CLI)** | Running everything locally, with no GitHub involved. |
 | **[Composite Action](Composite-Action)** | The escape hatch for a pipeline of your own. |
+| **[Migrating](Migrating)** | What changes between majors, and how to move up. |
 | **[Troubleshooting](Troubleshooting)** | Error messages, exit codes, and what they mean. |
 
 ## The two ideas

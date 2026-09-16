@@ -10,4 +10,5 @@
 - [Pipelines](Pipelines)
 - [CLI](CLI)
 - [Composite Action](Composite-Action)
+- [Migrating](Migrating)
 - [Troubleshooting](Troubleshooting)
