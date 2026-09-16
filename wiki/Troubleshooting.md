@@ -162,6 +162,34 @@ a fresh runner genuinely takes a while.
 
 ---
 
+## The client gametest
+
+### `Couldn't find matching GLX visual`, then `Vulkan is not supported: ... VK_KHR_surface`
+
+The client found no render backend. From Minecraft 26.3 the client opens its
+window through SDL3 and tries OpenGL, then Vulkan. SDL3 wants a 24-bit visual,
+and `xvfb-run` starts an **8-bit** screen by default; Vulkan needs a driver that
+can draw on X11. Older clients (GLFW) put up with the 8-bit screen, which is why
+this only shows up on 26.3.
+
+The pipelines provide both since the `virtual-display` action: a 24-bit Xvfb
+screen with Mesa's software OpenGL (llvmpipe) and software Vulkan (lavapipe).
+The `Show what the display offers` step prints what each stack found. To
+reproduce locally or in your own workflow:
+
+```bash
+sudo apt-get install xvfb mesa-utils libgl1-mesa-dri mesa-vulkan-drivers libvulkan1
+xvfb-run -a -s "-screen 0 1920x1080x24 +extension GLX +render" ./gradlew runClientGameTest
+```
+
+### The gametest step stops after 30 minutes
+
+A client that finds no backend, or waits on a screen, hangs rather than exits.
+The step is cut at 30 minutes so the report and the screenshots still get
+uploaded; look at `run/logs/` in the `gametest-artifacts` artifact.
+
+---
+
 ## Updates
 
 ### exit code `2`, the loader does not support that Minecraft version yet

@@ -20,7 +20,7 @@ Standard library only, except PyYAML in `config.py`. No `bash`, no `jq`, no
 | `scripts/` | Four executables: argument parsing, environment variables and exit codes around `lib/`. |
 | `tests/` | `unittest`, no network. |
 | `.github/workflows/` | The three reusable pipelines, plus the `internal-*` ones this repository runs on itself. |
-| `.github/actions/` | `setup`, `report`, `report-issue`, composite actions shared by the pipelines. |
+| `.github/actions/` | `setup`, `report`, `report-issue`, `virtual-display`, composite actions shared by the pipelines. |
 | `testmod/fabric/` | A real Fabric mod, built and booted by the self-test. |
 | `doc/` | These pages. |
 
