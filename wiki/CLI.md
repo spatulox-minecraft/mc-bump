@@ -9,6 +9,17 @@ git clone https://github.com/spatulox-minecraft/mc-bump.git ../mc-bump
 python3 -m pip install pyyaml
 ```
 
+<details>
+<summary>@v1</summary>
+
+The default branch is the v2 line. Clone the v1 tag instead:
+
+```bash
+git clone --branch v1 https://github.com/spatulox-minecraft/mc-bump.git ../mc-bump
+```
+
+</details>
+
 Requires `python3` and `pyyaml`, and nothing else. No `bash`, no `jq`, no
 `shellcheck`.
 
@@ -69,6 +80,18 @@ Mutually exclusive. Without one, it updates and stops.
 | `--force` | Reapply the version already in the repo. |
 | `--buildtool VERSION` or `--loom VERSION` | Pin the build plugin instead of resolving the newest stable one your Gradle wrapper can run. An old Minecraft version may need an older fabric-loom. A pin the wrapper cannot run is refused up front. |
 | `--root PATH` | Your mod's repository. |
+
+<details>
+<summary>@v1</summary>
+
+| Flag | |
+|---|---|
+| `VERSION` | Target Minecraft version. Defaults to the latest Mojang release. |
+| `--buildtool VERSION` or `--loom VERSION` | Pin the build plugin instead of resolving the latest stable one. Not checked against the Gradle wrapper. |
+
+Without `--loom`, the newest stable fabric-loom is taken whatever your wrapper.
+
+</details>
 
 ### Exit codes
 
@@ -189,6 +212,13 @@ PYTHONPATH=$MCB python3 -m lib.config --github-output   # what a workflow branch
 PYTHONPATH=$MCB python3 -m lib.config --tag 26.2-1.1.0  # the release tag
 PYTHONPATH=$MCB python3 -m lib.config --channel 26.2-rc-1  # rc: release, rc, pre or snapshot
 ```
+
+<details>
+<summary>@v1</summary>
+
+No `--channel` flag.
+
+</details>
 
 Run it after editing `.github/mc-bump.yml`. Validation
 [refuses by name](Configuration#validation-is-strict-on-purpose), so this turns a

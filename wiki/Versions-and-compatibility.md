@@ -65,6 +65,21 @@ A weekly snapshot id (`25w45a`) is **refused**: Fabric maps it onto the release 
 leads to through a table only the loader has, and a wrong guess is a mod the
 loader silently never loads. Mojang stopped shipping that shape with 26.1.
 
+<details>
+<summary>@v1</summary>
+
+Only Minecraft releases are followed. Forcing a release candidate through the
+`minecraft-version` input does not work end to end:
+
+- the matrix has nothing to boot, the non-numeric target is filtered out;
+- the range is written as Mojang spells the id (`=26.2-rc-1`), which Fabric Loader
+  refuses;
+- with `{mc}-{mod}`, `mod_version` is misread (`26.2` and `rc-1-1.1.0`);
+- the server test expects `26.2-rc-1` where Minecraft logs
+  `26.2 Release Candidate 1`.
+
+</details>
+
 ## The jar name says what was tested
 
 `mod_version` carries the same information in its `{mc}` half:
@@ -133,6 +148,16 @@ behaves, and that is not a side effect an update should carry. When the Loom
 taken is not the newest, the pull request says so on the build plugin row, which
 is your cue to run `./gradlew wrapper --gradle-version <version>` when it suits
 you.
+
+<details>
+<summary>@v1</summary>
+
+The build plugin is always the **newest** stable fabric-loom, whatever your
+wrapper. Loom 1.18.1 requires Gradle 9.7.0, so a mod on an older wrapper gets a
+build that fails before any test. Upgrade the wrapper, or pin a Loom with
+`--loom`.
+
+</details>
 
 They only move as a *reaction* to a red matrix:
 

@@ -114,6 +114,16 @@ reads `project.minecraft_version` rather than hardcoding a version.
 Without this guard the whole matrix would happily boot the same version three
 times and report green.
 
+<details>
+<summary>@v1</summary>
+
+`the server booted Minecraft 26.3 Release Candidate 3 while 26.3-rc-3 was
+expected`: v1 compares the id to the name Minecraft logs, and they only match for
+releases. Release candidates and snapshots are not supported on v1, see
+[Versions and compatibility](Versions-and-compatibility#release-candidates-and-snapshots).
+
+</details>
+
 ### `cannot read the booted version from the log`
 
 The server never reached its startup line, so it died earlier. The failure is
@@ -228,6 +238,24 @@ upgrade the wrapper as above.
 Not an error: a newer fabric-loom exists, and your Gradle wrapper cannot run it.
 The row names the Gradle it needs. Upgrade the wrapper when it suits you, and the
 next update takes it.
+
+<details>
+<summary>@v1</summary>
+
+#### `Could not resolve net.fabricmc:fabric-loom:1.18.1` / `No matching variant ... 'org.gradle.plugin.api-version' with value '9.7.0'`
+
+v1 writes the newest stable fabric-loom whatever your wrapper, and that Loom
+needs a newer Gradle than yours. The build fails while resolving its plugins,
+before any test. Upgrade the wrapper to the version in the message:
+
+```bash
+./gradlew wrapper --gradle-version 9.7.0
+```
+
+or pin an older Loom with `--loom VERSION`. None of the three messages above
+exist on v1.
+
+</details>
 
 ---
 

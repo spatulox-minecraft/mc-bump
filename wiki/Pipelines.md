@@ -37,6 +37,14 @@ config ──┬── unit-tests      pure JVM logic, seconds
 |---|---|---|
 | `mc-bump-ref` | `v2` | Which mc-bump to run. Only worth changing to test mc-bump itself from a branch. |
 
+<details>
+<summary>@v1</summary>
+
+`spatulox-minecraft/mc-bump/.github/workflows/ci.yml@v1`, where `mc-bump-ref`
+defaults to `v1`. The same goes for `auto-update` and `release`.
+
+</details>
+
 ### `unit-tests`
 
 Runs `tests.unit.task`, `test` by default. When `tests.unit.require-non-empty` is
@@ -119,6 +127,15 @@ whole matrix after each dependency bump.
 | `mc-bump-ref` | string | `v2` | |
 | `minecraft-version` | string | `""` | Force a version. Empty means the latest Mojang version in `minecraft.channels`. |
 | `force` | boolean | `false` | Continue even if the repo is already on that version. |
+
+<details>
+<summary>@v1</summary>
+
+`minecraft-version` empty means the latest Mojang **release**, and step 1 below
+resolves that release and the newest stable fabric-loom, whatever your Gradle
+wrapper.
+
+</details>
 
 ### The sequence
 
@@ -211,6 +228,16 @@ Four guards, all cheap, before the expensive matrix starts:
    while announcing the old one.
 4. **are the tokens there?** A missing or expired token is a two second check
    here, or a ninety minute one after the matrix.
+
+<details>
+<summary>@v1</summary>
+
+Three guards: already released, version proven, tokens. There is no channel
+guard, so every merged `minecraft_version` is published as a release: no
+`-Prelease_type` for the upload tasks, and the GitHub release is never a
+pre-release.
+
+</details>
 
 ### `matrix`
 

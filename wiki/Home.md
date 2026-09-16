@@ -14,6 +14,22 @@ jobs:
     secrets: inherit
 ```
 
+<details>
+<summary>@v1</summary>
+
+`@v1` is frozen: it follows Minecraft releases only, and always takes the newest
+fabric-loom whatever your Gradle wrapper. Existing callers keep working as they
+are.
+
+```yaml
+jobs:
+  ci:
+    uses: spatulox-minecraft/mc-bump/.github/workflows/ci.yml@v1
+    secrets: inherit
+```
+
+</details>
+
 ## Start here
 
 | | |

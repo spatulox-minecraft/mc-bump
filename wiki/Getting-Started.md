@@ -26,6 +26,15 @@ These keys are read, and some are rewritten by an update.
 [escalation ladder](Versions-and-compatibility#the-escalation-ladder) moves them,
 one rung at a time, after a red matrix.
 
+<details>
+<summary>@v1</summary>
+
+`loom_version` is the newest stable fabric-loom, whatever Gradle your wrapper is
+on. A wrapper older than that Loom requires fails while resolving the plugins,
+see [Troubleshooting](Troubleshooting#the-pull-request-says-the-build-plugin-is-not-the-newest).
+
+</details>
+
 A minimal file:
 
 ```properties
@@ -95,6 +104,14 @@ modrinth {
 
 No task backs `github`
 in `release.stores`: the release job attaches the jars `build` already produced.
+
+<details>
+<summary>@v1</summary>
+
+The publish tasks are called with no `-Prelease_type`: v1 only ever publishes
+Minecraft releases.
+
+</details>
 
 ### `fabric.mod.json`
 
@@ -185,6 +202,20 @@ hyphen cannot be reached with a dot, hence the index syntax. And
 working: on a `schedule` trigger `inputs` is empty, and an empty string is not a
 boolean.
 
+<details>
+<summary>@v1</summary>
+
+The three workflows are the same with `@v1` in each `uses:`. The
+`minecraft-version` input there means "Empty = latest release".
+
+```yaml
+    uses: spatulox-minecraft/mc-bump/.github/workflows/ci.yml@v1
+    uses: spatulox-minecraft/mc-bump/.github/workflows/auto-update.yml@v1
+    uses: spatulox-minecraft/mc-bump/.github/workflows/release.yml@v1
+```
+
+</details>
+
 ### Release
 
 ```yaml
@@ -246,8 +277,17 @@ If the second one is green, your CI will be too. See [CLI](CLI) for the rest.
 
 `@v2` is a tag moved by hand to each mc-bump release of the v2 line. Pin a
 commit SHA instead if you want the pipeline to change only when you say so.
-`@v1` still works and stays where it is, without release channels or the Loom
-selection.
+
+<details>
+<summary>@v1</summary>
+
+`@v1` still works and stays where it is. It has neither
+[release channels](Configuration#minecraft) nor the
+[Loom that follows your Gradle wrapper](Versions-and-compatibility#the-escalation-ladder).
+Moving to `@v2` needs no config change: every new key defaults to the v1
+behaviour.
+
+</details>
 
 > **Note.** A pull request opened by the auto-update with the default
 > `GITHUB_TOKEN` does **not** trigger `pull_request` workflows, so your `ci.yml`

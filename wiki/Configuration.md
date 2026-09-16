@@ -63,6 +63,14 @@ notify:
   log-tail: 100                    # log lines per <details> block
 ```
 
+<details>
+<summary>@v1</summary>
+
+There is no `minecraft` section and no `release.channels`. Both are **unknown
+keys** there, and refused as such.
+
+</details>
+
 ## Validation is strict on purpose
 
 A config that is subtly wrong does not crash. It produces a **green pipeline
@@ -132,6 +140,15 @@ error.
 
 A version forced through the `minecraft-version` input, or on the command line,
 is targeted whatever its channel.
+
+<details>
+<summary>@v1</summary>
+
+No channels: the auto-update always targets the latest Minecraft **release**.
+Forcing a release candidate or a snapshot through `minecraft-version` is not
+supported, see [Versions and compatibility](Versions-and-compatibility#release-candidates-and-snapshots).
+
+</details>
 
 ## `workflows`
 
@@ -279,6 +296,15 @@ A published non-release is labelled as such:
 
 The upload tasks belong to your build script, so reading the property is up to
 it, see [Getting Started](Getting-Started#gradle-tasks).
+
+<details>
+<summary>@v1</summary>
+
+`release.channels` does not exist. Whatever `minecraft_version` is merged gets
+published as a release, with no `-Prelease_type`, and the GitHub release is never
+marked as a pre-release.
+
+</details>
 
 ## `notify`
 
