@@ -222,8 +222,10 @@ jobs:
         if: steps.build.outcome != 'success' || steps.server.outcome != 'success'
         run: exit 1
 
-  # A real Minecraft client under xvfb: slow, flaky, and usually declared non
-  # blocking. It still reports, which is the point — an unrun test rots silently.
+  # A real Minecraft client on a virtual display: slow, flaky, and usually
+  # declared non blocking. It still reports, which is the point — an unrun test
+  # rots silently. The display offers software OpenGL and Vulkan, so both the
+  # GLFW clients and the SDL3 clients of 26.3+ find a backend.
   gametest:
     name: Client gametest
     needs: config
@@ -248,21 +250,21 @@ jobs:
           java-version: ${{ needs.config.outputs.java }}
       - uses: gradle/actions/setup-gradle@v5
 
-      - name: Install xvfb
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq xvfb
+      - uses: ./.mc-bump/.github/actions/virtual-display
 
+      # A client that finds no backend hangs instead of exiting. The step
+      # timeout fails only this step, so the report below still runs; the job
+      # timeout would cancel it all.
       - name: Run the client gametest
         id: gametest
         continue-on-error: true
+        timeout-minutes: 30
         env:
           TASK: ${{ needs.config.outputs.client_gametest_task }}
         run: |
           set -o pipefail
           chmod +x gradlew
-          xvfb-run -a ./gradlew "$TASK" --stacktrace --console=plain 2>&1 \
-            | tee gametest.log
+          ./gradlew "$TASK" --stacktrace --console=plain 2>&1 | tee gametest.log
 
       - if: always()
         uses: ./.mc-bump/.github/actions/report

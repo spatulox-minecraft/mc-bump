@@ -187,20 +187,27 @@ jobs:
           chmod +x gradlew
           python3 .mc-bump/scripts/test-with-escalation.py 2>&1 | tee test-matrix.log
 
-      # A real client under xvfb. Declared non blocking by most mods, which is
-      # why it never fails the run here — but it lands in the pull request table
-      # and in the issue all the same. An unrun test rots silently.
+      # A real client on a virtual display with software OpenGL and Vulkan, so
+      # the GLFW clients and the SDL3 clients of 26.3+ both find a backend.
+      # Declared non blocking by most mods, which is why it never fails the run
+      # here — but it lands in the pull request table and in the issue all the
+      # same. An unrun test rots silently.
+      - name: Virtual display
+        if: steps.update.outputs.status == 'updated' && steps.setup.outputs.gametest == 'true'
+        uses: ./.mc-bump/.github/actions/virtual-display
+
+      # A client that finds no backend hangs instead of exiting: the step
+      # timeout keeps it from eating the job timeout and the steps after it.
       - name: Client gametest
         id: gametest
         if: steps.update.outputs.status == 'updated' && steps.setup.outputs.gametest == 'true'
         continue-on-error: true
+        timeout-minutes: 30
         env:
           TASK: ${{ steps.setup.outputs.client_gametest_task }}
         run: |
           set -o pipefail
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq xvfb
-          xvfb-run -a ./gradlew "$TASK" --stacktrace --console=plain 2>&1 | tee gametest.log
+          ./gradlew "$TASK" --stacktrace --console=plain 2>&1 | tee gametest.log
 
       - if: steps.gametest.outcome != ''
         uses: ./.mc-bump/.github/actions/report

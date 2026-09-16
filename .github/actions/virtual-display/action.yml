@@ -1,0 +1,72 @@
+name: mc-bump virtual display
+description: >
+  A headless X display a Minecraft client can open a window on, whatever its
+  version: a 24-bit GLX screen with Mesa's software OpenGL (llvmpipe) for the
+  GLFW clients, plus Mesa's software Vulkan (lavapipe) for the SDL3 clients of
+  26.3 and later, which fall back to Vulkan when OpenGL fails.
+
+  Not `xvfb-run`: its default screen is 8-bit, which GLFW put up with but SDL3
+  does not (`Couldn't find matching GLX visual`). Exports DISPLAY for the rest
+  of the job, and prints what both stacks offer so a client that finds no
+  backend says which one is missing.
+
+inputs:
+  display:
+    description: X display number
+    default: "99"
+  screen:
+    description: Xvfb screen geometry and depth
+    default: 1920x1080x24
+
+runs:
+  using: composite
+  steps:
+    - name: Install Xvfb, Mesa OpenGL and Vulkan
+      shell: bash
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq --no-install-recommends \
+          xvfb xauth mesa-utils vulkan-tools \
+          libgl1 libgl1-mesa-dri libegl1 libvulkan1 mesa-vulkan-drivers
+
+    - name: Start the display
+      shell: bash
+      env:
+        DISPLAY_NUMBER: ${{ inputs.display }}
+        SCREEN: ${{ inputs.screen }}
+      run: |
+        Xvfb ":$DISPLAY_NUMBER" -screen 0 "$SCREEN" +extension GLX +render -noreset \
+          > "$RUNNER_TEMP/xvfb.log" 2>&1 &
+        for _ in $(seq 50); do
+          [ -S "/tmp/.X11-unix/X$DISPLAY_NUMBER" ] && break
+          sleep 0.1
+        done
+        if [ ! -S "/tmp/.X11-unix/X$DISPLAY_NUMBER" ]; then
+          cat "$RUNNER_TEMP/xvfb.log"
+          echo "::error::Xvfb did not start on :$DISPLAY_NUMBER"
+          exit 1
+        fi
+        # Software rendering only, and only lavapipe as the Vulkan driver: a
+        # runner has no GPU, and a stray ICD would be tried first.
+        icd=$(ls /usr/share/vulkan/icd.d/lvp_icd.*.json 2>/dev/null | head -n 1)
+        {
+          echo "DISPLAY=:$DISPLAY_NUMBER"
+          echo "LIBGL_ALWAYS_SOFTWARE=1"
+          if [ -n "$icd" ]; then
+            echo "VK_DRIVER_FILES=$icd"
+            echo "VK_ICD_FILENAMES=$icd"
+          fi
+        } >> "$GITHUB_ENV"
+
+    - name: Show what the display offers
+      shell: bash
+      env:
+        DISPLAY_NUMBER: ${{ inputs.display }}
+      run: |
+        export DISPLAY=":$DISPLAY_NUMBER" LIBGL_ALWAYS_SOFTWARE=1
+        echo "::group::OpenGL"
+        glxinfo -B || echo "::warning::no usable OpenGL on the virtual display"
+        echo "::endgroup::"
+        echo "::group::Vulkan"
+        vulkaninfo --summary || echo "::warning::no usable Vulkan on the virtual display"
+        echo "::endgroup::"
