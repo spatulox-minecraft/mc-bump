@@ -161,7 +161,7 @@ summary, and stops. The workflow file can stay in place.
 | `auto-update` | `true` | The weekly Minecraft update. |
 | `release` | `true` | Publishing and tagging. |
 | `unit-tests` | `true` | The JUnit job inside CI. |
-| `gametest.enabled` | `false` | A real Minecraft client under `xvfb`. Slow, flaky. |
+| `gametest.enabled` | `false` | A real Minecraft client on a virtual display (OpenGL and Vulkan in software). Slow, flaky. |
 | `gametest.blocking` | `false` | Does a failing gametest fail the run. |
 
 A non-blocking gametest still **reports**: it lands in the pull request table and

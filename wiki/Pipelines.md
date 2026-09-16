@@ -27,7 +27,7 @@ Three independent kinds of test, three jobs, so a red one names itself.
 ```
 config ──┬── unit-tests      pure JVM logic, seconds
          ├── matrix          build and boot a server, ONE JOB PER CLAIMED VERSION
-         ├── gametest        a real client under xvfb, usually non blocking
+         ├── gametest        a real client on a virtual display, usually non blocking
          └── report-failure / verdict
 ```
 
@@ -76,7 +76,9 @@ Each job uploads `server-logs-<version>`: the build log, the server log, and
 
 ### `gametest`
 
-A real Minecraft client under `xvfb`. Off by default
+A real Minecraft client on a virtual display (Xvfb, 24-bit) with software
+OpenGL (llvmpipe) and Vulkan (lavapipe), so every Minecraft version finds a
+render backend, SDL3 clients of 26.3+ included. Off by default
 (`workflows.gametest.enabled`), and usually declared non-blocking.
 
 Non-blocking means the job ends green and does **not** open a failure issue. It
