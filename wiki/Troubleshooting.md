@@ -215,47 +215,37 @@ know that Minecraft version", and it becomes exit code `2`.
 The Fabric maven metadata listed nothing purely numeric. Pin one yourself with
 `--loom VERSION`, or `--buildtool VERSION`.
 
-### `no stable fabric-loom among the 15 newest runs on this build: 1.18.1 requires Gradle >= 9.7.0 but the wrapper is on 8.14. ...`
+### `no stable fabric-loom release in the 1.17 line`
 
-Your Gradle wrapper is older than every recent fabric-loom supports. mc-bump
-refuses before writing anything, rather than leaving a build that fails while
-resolving its plugins. Upgrade the wrapper with the command in the message, and
-commit `gradle/wrapper/`:
+The target Minecraft version needs that Loom line and Fabric's maven lists no
+release of it yet, only snapshots. Retry later, or pin one with `--loom VERSION`.
 
-```bash
-./gradlew wrapper --gradle-version 9.7.0
-```
+### `every fabric-loom 1.17.x requires a newer Java than java_version 21`
 
-Or pin an older Loom with `--loom VERSION`.
+Every release of the line the target needs was built for a newer Java than the
+one this Minecraft version ships with. Pin an older Loom with `--loom VERSION`.
 
-### `fabric-loom 1.18.1 requires Gradle >= 9.7.0 but the wrapper is on 9.5.1`
+### `fabric-loom 1.18.1 requires Java >= 25, java_version is 21`
 
-The Loom given to `--loom` cannot run on your wrapper. Pick an older one, or
-upgrade the wrapper as above.
+The Loom given to `--loom` cannot run on this Minecraft version's Java. Pick an
+older one.
 
-### The pull request says the build plugin is not the newest
+### The pull request says `unchanged, no toolchain known for Minecraft ...`
 
-Not an error: a newer fabric-loom exists, and your Gradle wrapper cannot run it.
-The row names the Gradle it needs. Upgrade the wrapper when it suits you, and the
-next update takes it.
+Not an error: the target is older than every entry of
+[the toolchain table](Versions-and-compatibility#the-toolchain), so the build
+plugin and the wrapper are left as they are.
 
-<details>
-<summary>@v1</summary>
+### `cannot read the toolchain table ...`
 
-#### `Could not resolve net.fabricmc:fabric-loom:1.18.1` / `No matching variant ... 'org.gradle.plugin.api-version' with value '9.7.0'`
+`lib/loaders/fabric_toolchain.json` in the mc-bump checkout is missing or broken.
+That is a broken mc-bump, not a problem in your mod: re-run, or report it.
 
-v1 writes the newest stable fabric-loom whatever your wrapper, and that Loom
-needs a newer Gradle than yours. The build fails while resolving its plugins,
-before any test. Upgrade the wrapper to the version in the message:
+### `gradle-wrapper.properties: cannot read distributionUrl`
 
-```bash
-./gradlew wrapper --gradle-version 9.7.0
-```
-
-or pin an older Loom with `--loom VERSION`. None of the three messages above
-exist on v1.
-
-</details>
+The target needs a newer Gradle, and your wrapper does not name a
+`gradle-<version>-bin.zip` or `-all.zip` distribution mc-bump could rewrite.
+Update it yourself with `./gradlew wrapper --gradle-version <version>`.
 
 ---
 

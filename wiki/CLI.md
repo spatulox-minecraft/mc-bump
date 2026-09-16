@@ -78,7 +78,7 @@ Mutually exclusive. Without one, it updates and stops.
 | `--dry-run` | Show the changes, write nothing. Refused with `--run-tests`. |
 | `--json` | JSON on stdout, nothing else. Refused with `--run-tests`. |
 | `--force` | Reapply the version already in the repo. |
-| `--buildtool VERSION` or `--loom VERSION` | Pin the build plugin instead of resolving the newest stable one your Gradle wrapper can run. An old Minecraft version may need an older fabric-loom. A pin the wrapper cannot run is refused up front. |
+| `--buildtool VERSION` or `--loom VERSION` | Pin the build plugin. Without it, the plugin moves only when the target needs a newer line, see [the toolchain](Versions-and-compatibility#the-toolchain). The Gradle wrapper still follows what the pinned Loom declares. |
 | `--root PATH` | Your mod's repository. |
 
 <details>
@@ -87,9 +87,6 @@ Mutually exclusive. Without one, it updates and stops.
 | Flag | |
 |---|---|
 | `VERSION` | Target Minecraft version. Defaults to the latest Mojang release. |
-| `--buildtool VERSION` or `--loom VERSION` | Pin the build plugin instead of resolving the latest stable one. Not checked against the Gradle wrapper. |
-
-Without `--loom`, the newest stable fabric-loom is taken whatever your wrapper.
 
 </details>
 
@@ -201,6 +198,18 @@ The bumps are **kept** on failure, since they are the dependency diff you pick u
 from. Your `fabric.mod.json` is not touched: a bump is a hypothesis, and the
 floor is only written by `mc-bump.py --mark-supported` once the matrix has proven
 it.
+
+---
+
+## `refresh-toolchain.py`, for mc-bump maintainers
+
+Rebuilds [the toolchain table](Versions-and-compatibility#the-toolchain) from
+Fabric's example mod. A weekly workflow runs it; a mod never needs to.
+
+```bash
+python3 scripts/refresh-toolchain.py            # rewrite lib/loaders/fabric_toolchain.json
+python3 scripts/refresh-toolchain.py --check    # exit 1 when it is out of date
+```
 
 ---
 

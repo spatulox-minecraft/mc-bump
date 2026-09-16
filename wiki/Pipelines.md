@@ -131,16 +131,15 @@ whole matrix after each dependency bump.
 <details>
 <summary>@v1</summary>
 
-`minecraft-version` empty means the latest Mojang **release**, and step 1 below
-resolves that release and the newest stable fabric-loom, whatever your Gradle
-wrapper.
+`minecraft-version` empty means the latest Mojang **release**.
 
 </details>
 
 ### The sequence
 
 ```
-1. resolve       latest Mojang version in minecraft.channels, then the loader, API and build plugin for it
+1. resolve       latest Mojang version in minecraft.channels, the loader and API for it,
+                 and the build plugin and Gradle wrapper only if that version needs newer
 2. commit        the bump and the optimistically widened compatibility range
 3. unit tests    seconds, and a broken unit test explains a broken matrix
 4. matrix        every claimed version, WITH the escalation ladder

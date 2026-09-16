@@ -17,9 +17,8 @@ jobs:
 <details>
 <summary>@v1</summary>
 
-`@v1` is frozen: it follows Minecraft releases only, and always takes the newest
-fabric-loom whatever your Gradle wrapper. Existing callers keep working as they
-are.
+`@v1` follows Minecraft releases only: no release candidates, no snapshots.
+Existing callers keep working as they are.
 
 ```yaml
 jobs:
