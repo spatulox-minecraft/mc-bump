@@ -311,6 +311,8 @@ def pr_body(
     workflow_file: str,
     log_tail: int = 100,
     buildtool_note: str = "",
+    gradle_version: str = "",
+    gradle_note: str = "",
 ) -> str:
     def frozen_note(in_use: str, available: str) -> str:
         # "frozen" is the normal case and worth saying out loud, so nobody reads
@@ -348,6 +350,13 @@ def pr_body(
             f"only publishes it when `{channel}` is listed in `release.channels`."
         )
 
+    # Only when the mod has a wrapper: without one there is nothing to report.
+    gradle_row = (
+        f"| Gradle wrapper | `{gradle_version}` | {gradle_note or 'unchanged'} |\n"
+        if gradle_version
+        else ""
+    )
+
     sections += [
         "## Resolved versions\n\n"
         "| | version | |\n"
@@ -356,7 +365,8 @@ def pr_body(
         f"| {loader_name} | `{loader_version}` | {frozen_note(loader_version, available_loader)} |\n"
         f"| {api_name} | `{api_version}` | {frozen_note(api_version, available_api)} |\n"
         f"| {buildtool_name} | `{buildtool_version}` | build plugin, "
-        f"{buildtool_note or 'follows the latest stable'} |\n"
+        f"{buildtool_note or 'unchanged'} |\n"
+        f"{gradle_row}"
         f"| Java | `{java}` | from the Mojang manifest |\n"
         f"| `mod_version` | `{mod_version}` | |\n"
         f"| compatibility range | {compat} | |",

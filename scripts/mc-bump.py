@@ -54,7 +54,11 @@ from lib import config as config_module  # noqa: E402
 from lib import update as update_module  # noqa: E402
 from lib.common import Failure  # noqa: E402
 from lib.github import output as github_output  # noqa: E402
-from lib.gradle import read_property, read_wrapper_gradle_version  # noqa: E402
+from lib.gradle import (  # noqa: E402
+    read_property,
+    read_wrapper_gradle_version,
+    set_wrapper_gradle_version,
+)
 from lib.loaders.base import BuildEnv  # noqa: E402
 from lib.matrix import run_with_escalation  # noqa: E402
 from lib.versions import (  # noqa: E402
@@ -120,8 +124,9 @@ def build_parser() -> argparse.ArgumentParser:
         "--loom",
         dest="buildtool",
         metavar="VERSION",
-        help="pin the build plugin instead of resolving the latest stable one "
-        "(e.g. an older fabric-loom for an old Minecraft version)",
+        help="pin the build plugin instead of keeping it, or moving it only when the "
+        "target Minecraft version needs a newer line. The Gradle wrapper still "
+        "follows what that version declares.",
     )
     parser.add_argument(
         "--run-tests",
@@ -293,6 +298,8 @@ def main() -> int:
         "available_api_version": None,
         "buildtool_version": None,
         "buildtool_note": "",
+        "gradle_version": None,
+        "gradle_note": "",
         "java_version": None,
         "mod_version": None,
         "minecraft_range": None,
@@ -310,16 +317,20 @@ def main() -> int:
     if target == current and not args.force:
         return stop("up-to-date", "Already up to date. (--force to reapply)", 0)
 
-    # Before resolving: the build plugin has to run on the Java this update
-    # writes and on the Gradle the mod's wrapper already pins. When Mojang does
-    # not say, java_version is left as is, so that is what the build runs on.
+    # What the mod builds with today. The toolchain only moves when the target
+    # needs more, and the build plugin has to run on the Java this update writes:
+    # when Mojang does not say, java_version is left as is, so that is the one.
     java = java_version_for(target)
     build_java = java
     current_java = read_property(properties, "java_version") or ""
     if build_java is None and current_java.isdigit():
         build_java = int(current_java)
     gradle = read_wrapper_gradle_version(project.paths)
-    env = BuildEnv(gradle=gradle, java=build_java)
+    env = BuildEnv(
+        buildtool=read_property(properties, keys["buildtool"]),
+        gradle=gradle,
+        java=build_java,
+    )
 
     resolved = loader.resolve(target, pin_buildtool=args.buildtool, env=env)
     result["available_loader_version"] = resolved.loader
@@ -340,15 +351,9 @@ def main() -> int:
     log(f"\n  {keys['loader']} = {frozen(frozen_loader, resolved.loader)}")
     log(f"  {keys['api']} = {frozen(frozen_api, resolved.api)}")
     buildtool_note = resolved.extra.get("buildtool_note", "")
-    if args.buildtool:
-        buildtool_suffix = " (pinned)"
-    elif buildtool_note:
-        buildtool_suffix = f" ({buildtool_note})"
-    else:
-        buildtool_suffix = ""
-    log(f"  {keys['buildtool']} = {resolved.buildtool}{buildtool_suffix}")
-    if gradle is None:
-        log("  (no Gradle wrapper found: the build plugin is not checked against Gradle)")
+    gradle_note = resolved.extra.get("gradle_note", "")
+    log(f"  {keys['buildtool']} = {resolved.buildtool} ({buildtool_note})")
+    log(f"  gradle wrapper = {resolved.gradle or '(none)'} ({gradle_note})")
     if java is None:
         log("  java_version = (absent from the Mojang manifest, left as is)")
     else:
@@ -371,6 +376,12 @@ def main() -> int:
         if java is not None
         else False
     )
+    # The wrapper moves in the same pass as the build plugin that needs it.
+    gradle_changed = (
+        set_wrapper_gradle_version(project.paths, resolved.gradle, args.dry_run)
+        if resolved.gradle and gradle
+        else False
+    )
 
     # The range has to be widened NOW, before the tests: otherwise the loader
     # refuses to load the mod on the new version and no version could ever be
@@ -389,11 +400,13 @@ def main() -> int:
             "status": "updated",
             "buildtool_version": resolved.buildtool,
             "buildtool_note": buildtool_note,
+            "gradle_version": resolved.gradle,
+            "gradle_note": gradle_note,
             "java_version": java,
             "mod_version": applied.mod_version,
             "supported_minecraft_versions": applied.supported,
             "minecraft_range": new_range,
-            "changed": applied.changed or range_changed or java_changed,
+            "changed": applied.changed or range_changed or java_changed or gradle_changed,
         }
     )
 

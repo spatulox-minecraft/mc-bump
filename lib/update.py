@@ -203,7 +203,7 @@ class UpdateResult:
 def update_gradle_properties(
     project: Project,
     minecraft_version: str,
-    buildtool_version: str,
+    buildtool_version: str | None,
     java_version: int | None,
     dry_run: bool,
     log,
@@ -215,7 +215,8 @@ def update_gradle_properties(
     text = original
 
     text = set_property(text, "minecraft_version", minecraft_version)
-    text = set_property(text, loader.gradle_keys["buildtool"], buildtool_version)
+    if buildtool_version:
+        text = set_property(text, loader.gradle_keys["buildtool"], buildtool_version)
     if java_version is not None:
         text = set_property(text, "java_version", str(java_version))
 

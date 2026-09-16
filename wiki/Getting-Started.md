@@ -19,21 +19,15 @@ These keys are read, and some are rewritten by an update.
 | `java_version` | ✅ | ✅ | derived from the Minecraft version, via the Mojang manifest |
 | `loader_version` | ✅ | frozen¹ | `fabricloader` |
 | `fabric_api_version` | ✅ | frozen¹ | Fabric API |
-| `loom_version` | ✅ | ✅ | the build plugin follows, it does not ship in the jar: the newest your Gradle wrapper can run |
+| `loom_version` | ✅ | when needed | the build plugin, moved only when the target Minecraft version needs a newer line, see [the toolchain](Versions-and-compatibility#the-toolchain) |
 | `archives_base_name` | | | used by your `build.gradle` for the jar name |
 
 ¹ Frozen means an update never touches them. Only the
 [escalation ladder](Versions-and-compatibility#the-escalation-ladder) moves them,
 one rung at a time, after a red matrix.
 
-<details>
-<summary>@v1</summary>
-
-`loom_version` is the newest stable fabric-loom, whatever Gradle your wrapper is
-on. A wrapper older than that Loom requires fails while resolving the plugins,
-see [Troubleshooting](Troubleshooting#the-pull-request-says-the-build-plugin-is-not-the-newest).
-
-</details>
+`gradle/wrapper/gradle-wrapper.properties` is rewritten too, but only when the
+target Minecraft version needs a newer Gradle than the wrapper names.
 
 A minimal file:
 
@@ -275,17 +269,16 @@ If the second one is green, your CI will be too. See [CLI](CLI) for the rest.
 
 ## Pinning a version
 
-`@v2` is a tag moved by hand to each mc-bump release of the v2 line. Pin a
+`@v2` is a tag on the v2 line, moved to each mc-bump release and whenever the [toolchain table](Versions-and-compatibility#the-toolchain) is refreshed. Pin a
 commit SHA instead if you want the pipeline to change only when you say so.
 
 <details>
 <summary>@v1</summary>
 
-`@v1` still works and stays where it is. It has neither
-[release channels](Configuration#minecraft) nor the
-[Loom that follows your Gradle wrapper](Versions-and-compatibility#the-escalation-ladder).
-Moving to `@v2` needs no config change: every new key defaults to the v1
-behaviour.
+`@v1` still works, and follows the v1 line. It has no
+[release channels](Configuration#minecraft), and shares
+[the toolchain](Versions-and-compatibility#the-toolchain) handling with v2. Moving
+to `@v2` needs no config change: every new key defaults to the v1 behaviour.
 
 </details>
 

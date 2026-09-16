@@ -13,7 +13,7 @@ repository checked out in the workspace, so you can build a pipeline of your own
 <details>
 <summary>@v1</summary>
 
-Same inputs, same scripts, frozen at v1:
+Same inputs, same scripts, on the v1 line:
 
 ```yaml
 - uses: spatulox-minecraft/mc-bump@v1
@@ -21,8 +21,8 @@ Same inputs, same scripts, frozen at v1:
     command: test-matrix.py
 ```
 
-`mc-bump.py` there follows Minecraft releases only and takes the newest
-fabric-loom, see [Versions and compatibility](Versions-and-compatibility).
+`mc-bump.py` there follows Minecraft releases only, see
+[Versions and compatibility](Versions-and-compatibility#release-candidates-and-snapshots).
 
 </details>
 

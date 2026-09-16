@@ -331,6 +331,8 @@ jobs:
           BUILDTOOL_KEY: ${{ steps.final.outputs.buildtool_key }}
           BUILDTOOL: ${{ steps.final.outputs.buildtool_version }}
           BUILDTOOL_NOTE: ${{ steps.update.outputs.buildtool_note }}
+          GRADLE: ${{ steps.update.outputs.gradle_version }}
+          GRADLE_NOTE: ${{ steps.update.outputs.gradle_note }}
           AVAILABLE_LOADER: ${{ steps.update.outputs.available_loader_version }}
           AVAILABLE_API: ${{ steps.update.outputs.available_api_version }}
           JAVA: ${{ steps.update.outputs.java_version }}
@@ -366,6 +368,8 @@ jobs:
             --arg buildtool_name "$BUILDTOOL_KEY" \
             --arg buildtool_version "$BUILDTOOL" \
             --arg buildtool_note "$BUILDTOOL_NOTE" \
+            --arg gradle_version "$GRADLE" \
+            --arg gradle_note "$GRADLE_NOTE" \
             --arg java "$JAVA" \
             --arg mod_version "$MOD_VERSION" \
             --arg compat_range "$RANGE" \

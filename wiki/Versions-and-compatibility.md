@@ -128,38 +128,14 @@ new Minecraft version is not supported.
 
 ## The escalation ladder
 
-An update moves one variable: Minecraft. The build plugin follows, because it is
-a Gradle plugin and does not ship in your jar. Java follows, because Mojang
-dictates it. The loader and its API stay **frozen**.
+An update moves one variable: Minecraft. Java follows, because Mojang dictates
+it. The loader and its API stay **frozen**.
 
-The build plugin follows **your Gradle wrapper**, never the other way round. Each
-fabric-loom version publishes the Gradle and the Java it needs to run
-(`org.gradle.plugin.api-version` and `org.gradle.jvm.version` in its module
-metadata), and the update takes the newest stable one your
-`gradle/wrapper/gradle-wrapper.properties` and `java_version` can run:
+The build plugin and the Gradle wrapper only move **when the target Minecraft
+version needs it**, see [the toolchain](#the-toolchain) below. On an update where
+your mod already builds with enough, neither is touched.
 
-| wrapper | newest Loom | taken | why |
-|---|---|---|---|
-| `9.7.0` | `1.18.1` (needs Gradle 9.7.0) | `1.18.1` | |
-| `9.5.1` | `1.18.1` (needs Gradle 9.7.0) | `1.17.21` | the newest that runs on 9.5.1 |
-
-mc-bump never edits the wrapper: a Gradle upgrade changes how your whole build
-behaves, and that is not a side effect an update should carry. When the Loom
-taken is not the newest, the pull request says so on the build plugin row, which
-is your cue to run `./gradlew wrapper --gradle-version <version>` when it suits
-you.
-
-<details>
-<summary>@v1</summary>
-
-The build plugin is always the **newest** stable fabric-loom, whatever your
-wrapper. Loom 1.18.1 requires Gradle 9.7.0, so a mod on an older wrapper gets a
-build that fails before any test. Upgrade the wrapper, or pin a Loom with
-`--loom`.
-
-</details>
-
-They only move as a *reaction* to a red matrix:
+The loader and its API only move as a *reaction* to a red matrix:
 
 ```
 matrix with the frozen dependencies
@@ -193,6 +169,50 @@ now genuinely required.
 
 Only what moved. An API left at `*` keeps its `*`. And only after a green matrix,
 since a bump is a hypothesis until the matrix proves it.
+
+## The toolchain
+
+Minecraft needs no Gradle. The build plugin does: fabric-loom 1.18.1 refuses to
+load on a Gradle older than 9.7.0, and a build that fails there fails before any
+test. Fabric builds its own example mod with one pair per Minecraft version, and
+mc-bump ships that pair as a table, `lib/loaders/fabric_toolchain.json`:
+
+| Minecraft | fabric-loom | Gradle |
+|---|---|---|
+| `26.1` | `1.15` | `9.3.0` |
+| `26.2` | `1.17` | `9.5.1` |
+
+An update compares your mod to the entry for the target, and moves only what is
+**below** it:
+
+| your mod | target `26.2` needs | written |
+|---|---|---|
+| Loom `1.17.18`, Gradle `9.5.1` | `1.17` / `9.5.1` | nothing |
+| Loom `1.18.1`, Gradle `9.7.0` | `1.17` / `9.5.1` | nothing, never moved down |
+| Loom `1.15.4`, Gradle `9.3.0` | `1.17` / `9.5.1` | Loom `1.17.21`, wrapper `9.5.1` |
+
+- The Loom taken is the newest release **of the required line**, not the newest
+  overall, and one your `java_version` can run.
+- The wrapper goes to the highest of the table's Gradle and the one that Loom
+  declares in its module metadata. Only `gradle-wrapper.properties` changes: the
+  `distributionUrl`, and `distributionSha256Sum` when you pin one.
+- A release candidate or a snapshot is governed by the release it leads to, and a
+  version the table does not list yet by the closest release below it.
+- A version older than the table moves nothing.
+
+The pull request carries a build plugin row and a Gradle wrapper row, each saying
+whether it moved and why.
+
+The table is rebuilt every week from
+[fabric-example-mod](https://github.com/FabricMC/fabric-example-mod): for each
+branch, the commit that first set `minecraft_version` to that version. Later
+commits backport newer tooling to every branch at once and say nothing about what
+a version needs. Branches Fabric recreated give its current pair rather than the
+historical minimum, which can move an old mod further than strictly needed, never
+less.
+
+`--loom VERSION` pins the build plugin instead. The wrapper still follows what
+that Loom declares.
 
 ## When nothing happens
 

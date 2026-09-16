@@ -228,12 +228,19 @@ class PrBodyChannelTest(unittest.TestCase):
     def test_a_release_carries_no_warning(self):
         self.assertNotIn("not a release", report.pr_body(minecraft="26.2", **self.FIELDS))
 
-    def test_the_build_plugin_says_why_it_is_not_the_newest(self):
-        self.assertIn("follows the latest stable", report.pr_body(minecraft="26.2", **self.FIELDS))
-        note = "newest that runs on this build; 1.18.1 requires Gradle >= 9.7.0"
-        body = report.pr_body(minecraft="26.2", buildtool_note=note, **self.FIELDS)
-        self.assertIn(note, body)
-        self.assertNotIn("follows the latest stable", body)
+    def test_the_toolchain_rows_say_why_they_moved_or_not(self):
+        body = report.pr_body(
+            minecraft="26.2",
+            buildtool_note="Minecraft 26.2 needs 1.17",
+            gradle_version="9.5.1",
+            gradle_note="9.3.0 -> 9.5.1, fabric-loom 1.17.21 runs on Gradle 9.5.1",
+            **self.FIELDS,
+        )
+        self.assertIn("build plugin, Minecraft 26.2 needs 1.17", body)
+        self.assertIn("| Gradle wrapper | `9.5.1` | 9.3.0 -> 9.5.1", body)
+
+    def test_no_wrapper_means_no_gradle_row(self):
+        self.assertNotIn("Gradle wrapper", report.pr_body(minecraft="26.2", **self.FIELDS))
 
     def test_a_candidate_says_merging_may_not_publish(self):
         body = report.pr_body(minecraft="26.2-rc-1", **self.FIELDS)

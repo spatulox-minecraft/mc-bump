@@ -122,8 +122,8 @@ emptied and the sync would otherwise wipe every page.
 
 ## Releasing
 
-The pipelines are consumed as `@v2`, a tag moved by hand on the v2 line. `v1`
-is frozen. A change that breaks a mod's existing `.github/mc-bump.yml`, whether a
+The pipelines are consumed as `@v2`, a tag on the v2 line, and `@v1` on the
+`release/v1` branch. A change that breaks a mod's existing `.github/mc-bump.yml`, whether a
 removed key, a changed default or a stricter schema, is a v3 and not a v2 move.
 Mods pin `@v2` precisely so their CI does not change under them on a Monday
 morning.
@@ -135,6 +135,15 @@ green on `main`:
 git tag -fa v2 -m "mc-bump v2" <commit>
 git push -f origin v2
 ```
+
+`release/v1` is moved the same way with `v1`. It takes fixes, never features.
+
+The toolchain table (`lib/loaders/fabric_toolchain.json`) is refreshed every
+Monday by `internal-toolchain.yml`, on `main` and on `release/v1`. When it
+changes, the job runs the tests, commits, and moves `v2` and `v1` to that commit,
+but only a tag that was already on its branch head: a refresh never releases
+commits nobody released. Run `python3 scripts/refresh-toolchain.py` to do the
+same by hand.
 
 And, for a new major, the `mc-bump-ref` default in `ci.yml`, `auto-update.yml`
 and `release.yml`: the reusable workflows check mc-bump out again at that ref, so

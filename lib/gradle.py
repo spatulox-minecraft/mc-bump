@@ -11,8 +11,9 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
-from .common import Failure
+from .common import Failure, http_get
 
 
 @dataclass(frozen=True)
@@ -86,8 +87,16 @@ def write_preserving_final_newline(path: Path, original: str, new: str) -> None:
 # The Gradle wrapper
 # --------------------------------------------------------------------------
 WRAPPER_DISTRIBUTION = re.compile(
-    r"^distributionUrl=.*gradle-([0-9][0-9A-Za-z.\-]*?)-(?:bin|all)\.zip\s*$", re.MULTILINE
+    r"^(distributionUrl=.*gradle-)([0-9][0-9A-Za-z.\-]*?)(-(?:bin|all)\.zip)\s*$", re.MULTILINE
 )
+WRAPPER_CHECKSUM = re.compile(r"^distributionSha256Sum=.*$", re.MULTILINE)
+GRADLE_DISTRIBUTIONS = "https://services.gradle.org/distributions"
+
+
+def wrapper_gradle_version(text: str) -> str | None:
+    """"9.5.1" from a gradle-wrapper.properties naming gradle-9.5.1-bin.zip."""
+    match = WRAPPER_DISTRIBUTION.search(text)
+    return match.group(2) if match else None
 
 
 def read_wrapper_gradle_version(paths: ModPaths) -> str | None:
@@ -100,8 +109,55 @@ def read_wrapper_gradle_version(paths: ModPaths) -> str | None:
         text = paths.gradle_wrapper.read_text(encoding="utf-8")
     except OSError:
         return None
+    return wrapper_gradle_version(text)
+
+
+def with_wrapper_gradle_version(
+    text: str, version: str, checksum: Callable[[str], str] | None = None
+) -> str:
+    """The wrapper properties pointing at `version`, same distribution kind.
+
+    A pinned distributionSha256Sum is replaced by the one Gradle publishes, since
+    the old sum would make the wrapper refuse the new download. `checksum` gets
+    the distribution file name ("gradle-9.5.1-bin.zip") and is only called then.
+    Only the properties move: gradle-wrapper.jar and the gradlew scripts download
+    any distribution.
+    """
     match = WRAPPER_DISTRIBUTION.search(text)
-    return match.group(1) if match else None
+    if not match:
+        raise Failure("gradle-wrapper.properties: cannot read distributionUrl")
+    kind = match.group(3)
+    text = WRAPPER_DISTRIBUTION.sub(
+        lambda m: f"{m.group(1)}{version}{m.group(3)}", text, count=1
+    )
+    if WRAPPER_CHECKSUM.search(text):
+        if checksum is None:
+            raise Failure("gradle-wrapper.properties pins a checksum, none was given")
+        sum_ = checksum(f"gradle-{version}{kind[:-len('.zip')]}.zip")
+        text = WRAPPER_CHECKSUM.sub(lambda _: f"distributionSha256Sum={sum_}", text, count=1)
+    return text
+
+
+def published_checksum(distribution: str) -> str:
+    url = f"{GRADLE_DISTRIBUTIONS}/{distribution}.sha256"
+    value = http_get(url).strip()
+    if not re.fullmatch(r"[0-9a-f]{64}", value):
+        raise Failure(f"unexpected checksum from {url}")
+    return value
+
+
+def set_wrapper_gradle_version(paths: ModPaths, version: str, dry_run: bool) -> bool:
+    """Point the mod's wrapper at `version`. False when it already does."""
+    original = paths.gradle_wrapper.read_text(encoding="utf-8")
+    if wrapper_gradle_version(original) == version:
+        return False
+    if not dry_run:
+        write_preserving_final_newline(
+            paths.gradle_wrapper,
+            original,
+            with_wrapper_gradle_version(original, version, published_checksum),
+        )
+    return True
 
 
 def gradle_version_key(version: str) -> tuple:

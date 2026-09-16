@@ -6,7 +6,14 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from lib.gradle import ModPaths, gradle_version_key, read_wrapper_gradle_version
+from lib.common import Failure
+from lib.gradle import (
+    ModPaths,
+    gradle_version_key,
+    read_wrapper_gradle_version,
+    set_wrapper_gradle_version,
+    with_wrapper_gradle_version,
+)
 
 WRAPPER = """\
 distributionBase=GRADLE_USER_HOME
@@ -42,6 +49,47 @@ class WrapperVersionTest(unittest.TestCase):
     def test_an_unreadable_url_means_no_constraint(self):
         self.write("distributionUrl=https\\://example.invalid/custom.zip\n")
         self.assertIsNone(read_wrapper_gradle_version(self.paths))
+
+
+class WrapperRewriteTest(WrapperVersionTest):
+    def test_only_the_version_moves(self):
+        text = WRAPPER.format(version="9.3.0", kind="all")
+        rewritten = with_wrapper_gradle_version(text, "9.5.1")
+        self.assertIn("gradle-9.5.1-all.zip", rewritten)
+        self.assertEqual(rewritten.replace("9.5.1", "9.3.0"), text)
+
+    def test_a_pinned_checksum_is_replaced_by_the_published_one(self):
+        text = WRAPPER.format(version="9.3.0", kind="bin") + "distributionSha256Sum=" + "a" * 64 + "\n"
+        asked = []
+        rewritten = with_wrapper_gradle_version(
+            text, "9.5.1", lambda name: asked.append(name) or "b" * 64
+        )
+        self.assertEqual(asked, ["gradle-9.5.1-bin.zip"])
+        self.assertIn("distributionSha256Sum=" + "b" * 64, rewritten)
+
+    def test_no_checksum_means_no_lookup(self):
+        with_wrapper_gradle_version(
+            WRAPPER.format(version="9.3.0", kind="bin"), "9.5.1", lambda _n: self.fail("looked up")
+        )
+
+    def test_an_unreadable_url_is_refused(self):
+        with self.assertRaises(Failure):
+            with_wrapper_gradle_version("distributionUrl=https\\://example.invalid/x.zip\n", "9.5.1")
+
+    def test_writing_the_version_already_there_changes_nothing(self):
+        self.write(WRAPPER.format(version="9.5.1", kind="bin"))
+        self.assertFalse(set_wrapper_gradle_version(self.paths, "9.5.1", dry_run=False))
+
+    def test_dry_run_writes_nothing(self):
+        text = WRAPPER.format(version="9.3.0", kind="bin")
+        self.write(text)
+        self.assertTrue(set_wrapper_gradle_version(self.paths, "9.5.1", dry_run=True))
+        self.assertEqual(self.paths.gradle_wrapper.read_text(encoding="utf-8"), text)
+
+    def test_the_wrapper_is_rewritten(self):
+        self.write(WRAPPER.format(version="9.3.0", kind="bin"))
+        self.assertTrue(set_wrapper_gradle_version(self.paths, "9.5.1", dry_run=False))
+        self.assertEqual(read_wrapper_gradle_version(self.paths), "9.5.1")
 
 
 class GradleVersionKeyTest(unittest.TestCase):

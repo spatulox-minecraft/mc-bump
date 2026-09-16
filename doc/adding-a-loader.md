@@ -51,11 +51,11 @@ differently needs no change anywhere else.
 
 | Method | |
 |---|---|
-| `resolve(minecraft_version, pin_buildtool=None) -> Resolved` | The loader, its API and the build plugin for that Minecraft version. Return an empty `Resolved` when the version is not supported yet. |
+| `resolve(minecraft_version, pin_buildtool=None, env=BuildEnv()) -> Resolved` | The loader and its API for that Minecraft version, and the build plugin and Gradle wrapper from `lib/toolchain.plan_toolchain`, given what the mod builds with today (`env`). Return an empty `Resolved` when the version is not supported yet. |
 | `resolve_one(role, minecraft_version) -> str \| None` | One role, for an escalation rung. |
 | `escalation_rungs() -> list[Rung]` | The ladder, in order. |
 
-`Resolved` carries `loader`, `api`, `buildtool` and a free-form `extra`, and
+`Resolved` carries `loader`, `api`, `buildtool`, `gradle` and a free-form `extra`, and
 `usable` says whether it is complete enough to write.
 
 A `Rung` is `(gradle_key, flag, label)`: the property to move, the `mc-bump.py`

@@ -37,6 +37,8 @@ class Resolved:
     loader: str | None = None
     api: str | None = None
     buildtool: str | None = None
+    #: the Gradle wrapper version the build plugin needs, None without a wrapper
+    gradle: str | None = None
     extra: dict[str, str] = field(default_factory=dict)
 
     @property
@@ -46,14 +48,13 @@ class Resolved:
 
 @dataclass(frozen=True)
 class BuildEnv:
-    """What the mod builds WITH, which the build plugin has to run on.
+    """What the mod builds WITH today: its build plugin, its Gradle wrapper, Java.
 
-    The build plugin is the one resolved version constrained by the mod's own
-    tooling rather than by Minecraft: a plugin compiled against a newer Gradle
-    fails before a single task runs. None means unknown, and applies no
-    constraint.
+    The toolchain only moves when the target Minecraft version needs more than
+    this. None means unknown.
     """
 
+    buildtool: str | None = None
     gradle: str | None = None
     java: int | None = None
 
@@ -87,7 +88,8 @@ class Loader(ABC):
 
         Never raises for "not published yet": that is `Resolved.usable == False`,
         which the caller reports as a normal, retry-next-week outcome. Does raise
-        when no build plugin runs on `env`: that one needs a human.
+        when the toolchain the target needs cannot be built with: that one needs
+        a human.
         """
 
     @abstractmethod
