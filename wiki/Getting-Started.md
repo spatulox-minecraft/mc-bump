@@ -278,7 +278,8 @@ commit SHA instead if you want the pipeline to change only when you say so.
 `@v1` still works, and follows the v1 line. It has no
 [release channels](Configuration#minecraft), and shares
 [the toolchain](Versions-and-compatibility#the-toolchain) handling with v2. Moving
-to `@v2` needs no config change: every new key defaults to the v1 behaviour.
+to `@v2` needs no config change: every new key defaults to the v1 behaviour,
+see [Migrating](Migrating#from-v1-to-v2).
 
 </details>
 
