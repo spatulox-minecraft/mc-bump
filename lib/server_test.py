@@ -26,6 +26,7 @@ from .common import Failure
 from .config import Project
 from .gradle import read_property
 from .patterns import Matcher, compile_pattern, strip_comments
+from .versions import same_minecraft_version
 
 BOOT_DONE = re.compile(r"Done \([0-9.]+s\)")
 BOOTED_VERSION = re.compile(r"Starting minecraft server version (.+)$", re.MULTILINE)
@@ -117,7 +118,7 @@ def check_log(test: ServerTest, log_text: str, log=print) -> None:
     if not booted_match:
         raise Failure("cannot read the booted version from the log")
     booted = booted_match.group(1).strip()
-    if booted != expected:
+    if not same_minecraft_version(booted, expected):
         raise Failure(
             f"the server booted Minecraft {booted} while {expected} was expected"
         )

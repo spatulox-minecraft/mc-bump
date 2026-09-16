@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .common import Failure
+from .versions import channel_of
 
 #: Most severe first. A build failure explains a server failure, which explains a
 #: gametest failure, so the reader should meet them in that order.
@@ -334,6 +335,19 @@ def pr_body(
         f"Automatic update of **{mod_id}** to **Minecraft `{minecraft}`** "
         f"(previous: `{previous}`).",
         verdict,
+    ]
+
+    channel = channel_of(minecraft)
+    if channel != "release":
+        # A green matrix on a snapshot is worth a PR, not a release: say which of
+        # the two merging leads to, since it depends on release.channels.
+        sections.append(
+            f"> [!WARNING]\n"
+            f"> Minecraft `{minecraft}` is a **{channel}**, not a release. Merging "
+            f"only publishes it when `{channel}` is listed in `release.channels`."
+        )
+
+    sections += [
         "## Resolved versions\n\n"
         "| | version | |\n"
         "|---|---|---|\n"

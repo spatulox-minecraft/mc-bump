@@ -14,6 +14,7 @@ from xml.etree import ElementTree
 
 from ..common import Failure, get_json, http_get
 from ..gradle import ModPaths, read_json, write_json
+from ..versions import parse_version
 from .base import Loader, Resolved, Rung
 
 FABRIC_META = "https://meta.fabricmc.net/v2/versions"
@@ -26,6 +27,46 @@ STABLE_LOOM = re.compile(r"^\d+(?:\.\d+)*$")
 
 # https://fabricmc.net/wiki/documentation:fabric_mod_json_spec
 MOD_ID_RE = re.compile(r"[a-z][a-z0-9_-]{1,63}")
+
+# The two id shapes Mojang uses for pre-releases and release candidates.
+DATE_BASED_ID = re.compile(r"(\d+\.\d+(?:\.\d+)?)-(snapshot|pre|rc)-(\d+)")
+LEGACY_PRE_ID = re.compile(r"(\d+\.\d+(?:\.\d+)?)-(pre|rc)(\d+)")
+
+
+def normalize_minecraft_version(version: str) -> str:
+    """The Minecraft version as Fabric Loader compares it.
+
+    Fabric Loader rewrites the id Mojang ships into semver before matching a
+    `depends.minecraft` predicate (McVersionLookup.normalizeVersion), so a mod
+    declaring "=26.2-rc-1" is refused on the very server it targets: the loader
+    sees "26.2-rc.1". The same rewrite, for the shapes an update can target:
+
+        26.2-snapshot-1   ->  26.2-alpha.1
+        26.2-pre-1        ->  26.2-pre.1
+        26.2-rc-1         ->  26.2-rc.1
+        1.21.11-pre1      ->  1.21.11-beta.1
+        1.21.11-rc1       ->  1.21.11-rc.1
+
+    A weekly snapshot (25w45a) is mapped by Fabric onto the release it leads to,
+    through a table only the loader has, so it is refused rather than guessed:
+    a wrong guess is a mod the loader silently never loads. Mojang stopped
+    shipping that shape with 26.1.
+    """
+    if parse_version(version) is not None:
+        return version
+    match = DATE_BASED_ID.fullmatch(version)
+    if match:
+        release, kind, number = match.groups()
+        return f"{release}-{'alpha' if kind == 'snapshot' else kind}.{number}"
+    match = LEGACY_PRE_ID.fullmatch(version)
+    if match:
+        release, kind, number = match.groups()
+        return f"{release}-{'beta' if kind == 'pre' else kind}.{number}"
+    raise Failure(
+        f"Minecraft {version}: Fabric Loader maps this version id through its own "
+        f"table, mc-bump cannot write a range it would accept. Only releases, "
+        f"pre-releases, release candidates and X.Y-snapshot-N snapshots are supported."
+    )
 
 
 class FabricLoader(Loader):
@@ -135,7 +176,7 @@ class FabricLoader(Loader):
     def render_range(self, low: str, high: str) -> str:
         """Fabric's own range syntax, as fabric.mod.json spells it."""
         if low == high:
-            return f"={low}"
+            return f"={normalize_minecraft_version(low)}"
         return f">={low} <={high}"
 
     def depends_keys(self) -> dict[str, str]:

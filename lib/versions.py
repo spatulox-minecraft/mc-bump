@@ -42,11 +42,79 @@ def mojang_manifest() -> dict:
     return _manifest_cache
 
 
+#: What a mod can choose to follow, from the most to the least stable.
+CHANNELS = ("release", "rc", "pre", "snapshot")
+
+_RC = re.compile(r".+-rc-?\d+")
+_PRE = re.compile(r".+-pre-?\d+")
+
+
+def channel_of(version: str) -> str:
+    """The channel of a Minecraft version id, read from the id alone.
+
+    Mojang's manifest types pre-releases, release candidates and snapshots all as
+    "snapshot", so the type cannot tell them apart; the id can, in both eras:
+
+        26.2, 1.21.11                  release
+        26.2-rc-1, 1.21.11-rc1         rc
+        26.2-pre-1, 1.21.11-pre1       pre
+        26.2-snapshot-1, 25w45a        snapshot
+
+    Reading the id rather than the manifest also keeps it offline, which is what
+    the release pipeline needs to decide on a version already in gradle.properties.
+    """
+    if parse_version(version) is not None:
+        return "release"
+    if _RC.fullmatch(version):
+        return "rc"
+    if _PRE.fullmatch(version):
+        return "pre"
+    return "snapshot"
+
+
+_LABEL_WORDS = (("releasecandidate", "rc"), ("prerelease", "pre"))
+
+
+def _canonical(version: str) -> str:
+    text = re.sub(r"[\s_-]+", "", version.lower())
+    for word, short in _LABEL_WORDS:
+        text = text.replace(word, short)
+    return text
+
+
+def same_minecraft_version(announced: str, version_id: str) -> bool:
+    """Does the name a server announces designate this version id?
+
+    Minecraft logs the NAME of a version, which for a release is its id but not
+    for the rest: 26.3-rc-3 boots as "26.3 Release Candidate 3". Both sides are
+    reduced to the same spelling, dots kept, so 26.1 and 26.1.1 still differ.
+    """
+    return announced == version_id or _canonical(announced) == _canonical(version_id)
+
+
+def latest_minecraft_version(channels: list[str] | tuple[str, ...]) -> str:
+    """The newest Minecraft version whose channel is one of `channels`.
+
+    Newest by releaseTime, not by manifest order: the order is newest first in
+    practice, but nothing documents it. old_alpha and old_beta never qualify.
+    """
+    candidates = [
+        entry
+        for entry in mojang_manifest().get("versions", [])
+        if entry.get("type") in ("release", "snapshot")
+        and entry.get("id")
+        and channel_of(entry["id"]) in channels
+    ]
+    if not candidates:
+        raise Failure(
+            f"no Minecraft version in the Mojang manifest for channel(s) "
+            f"{', '.join(channels)}"
+        )
+    return max(candidates, key=lambda entry: entry.get("releaseTime", ""))["id"]
+
+
 def latest_minecraft_release() -> str:
-    version = mojang_manifest().get("latest", {}).get("release")
-    if not version:
-        raise Failure("cannot read .latest.release from the Mojang manifest")
-    return version
+    return latest_minecraft_version(["release"])
 
 
 def java_version_for(minecraft_version: str) -> int | None:
@@ -94,7 +162,12 @@ def versions_to_test(target: str, supported: list[str]) -> list[str]:
     only the target proves nothing about the older versions of that series running
     with the freshly bumped dependencies. This is the list that must boot, not
     just its last element.
+
+    A non numeric target (a release candidate, a snapshot) is pinned exactly by
+    compat_bounds(), so it is the one version to boot.
     """
+    if parse_version(target) is None:
+        return [target]
     series = series_of(target)
     unique = {
         version
@@ -156,6 +229,12 @@ def mc_label(versions: list[str]) -> str:
 # --------------------------------------------------------------------------
 PLACEHOLDER = re.compile(r"\{(mc|mod)\}")
 
+#: What mc_label() produces: a release or "<series>.x", optionally a pre-release
+#: or candidate suffix, or a snapshot id of either era.
+MC_LABEL = (
+    r"(?:\d+\.\d+(?:\.(?:\d+|x))?(?:-(?:snapshot|pre|rc)-?\d+)?|\d+w\d+[a-z])"
+)
+
 
 def _template_parts(template: str) -> list[str]:
     """The placeholder names in the order they appear. Validates the template."""
@@ -191,18 +270,27 @@ def parse_mod_version(template: str, value: str) -> dict[str, str]:
     produced a jar whose name silently disagreed with what was tested.
     """
     names = _template_parts(template)
-    pattern = ""
-    for index, chunk in enumerate(PLACEHOLDER.split(template)):
-        if chunk in ("mc", "mod") and index % 2 == 1:
-            # Only the LAST placeholder is greedy, so "{mc}-{mod}" splits
-            # "26.1.x-1.1.0-beta" into 26.1.x and 1.1.0-beta rather than the
-            # other way round.
-            quantifier = "+" if chunk == names[-1] else "+?"
-            pattern += rf"(?P<{chunk}>\S{quantifier})"
-        else:
-            pattern += re.escape(chunk)
 
-    match = re.fullmatch(pattern, value)
+    def pattern(mc_shape: str | None) -> str:
+        out = ""
+        for index, chunk in enumerate(PLACEHOLDER.split(template)):
+            if chunk in ("mc", "mod") and index % 2 == 1:
+                if chunk == "mc" and mc_shape:
+                    out += rf"(?P<mc>{mc_shape})"
+                    continue
+                # Only the LAST placeholder is greedy, so "{mc}-{mod}" splits
+                # "26.1.x-1.1.0-beta" into 26.1.x and 1.1.0-beta rather than the
+                # other way round.
+                quantifier = "+" if chunk == names[-1] else "+?"
+                out += rf"(?P<{chunk}>\S{quantifier})"
+            else:
+                out += re.escape(chunk)
+        return out
+
+    # The shape of a label first: a release candidate carries dashes of its own,
+    # and the lazy split alone read "26.2-rc-1-1.1.0" as 26.2 and "rc-1-1.1.0".
+    # The lazy split stays as the fallback for a label of any other shape.
+    match = re.fullmatch(pattern(MC_LABEL), value) or re.fullmatch(pattern(None), value)
     if not match:
         raise Failure(
             f"mod_version = '{value}' does not match version.format = '{template}'. "

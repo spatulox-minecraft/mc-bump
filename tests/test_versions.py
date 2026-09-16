@@ -15,10 +15,15 @@ reset path is exercised the day Mojang ships a new series, not before.
 from __future__ import annotations
 
 import unittest
+from unittest import mock
 
+from lib import versions
 from lib.common import Failure
 from lib.versions import (
+    channel_of,
     compat_bounds,
+    latest_minecraft_version,
+    same_minecraft_version,
     mc_label,
     parse_mod_version,
     parse_version,
@@ -43,6 +48,84 @@ class SeriesTest(unittest.TestCase):
     def test_parse_version_rejects_anything_not_purely_numeric(self):
         for version in ("24w14a", "26.2-rc1", "1.21-pre1", ""):
             self.assertIsNone(parse_version(version), version)
+
+
+class ChannelTest(unittest.TestCase):
+    """Mojang types pre-releases, candidates and snapshots all as "snapshot"."""
+
+    def test_both_id_eras_are_classified(self):
+        cases = {
+            "26.2": "release",
+            "1.21.11": "release",
+            "26.2-rc-1": "rc",
+            "1.21.11-rc1": "rc",
+            "26.2-pre-2": "pre",
+            "1.21.11-pre3": "pre",
+            "26.2-snapshot-1": "snapshot",
+            "25w45a": "snapshot",
+        }
+        for version, channel in cases.items():
+            self.assertEqual(channel_of(version), channel, version)
+
+
+class BootedVersionTest(unittest.TestCase):
+    """The server logs a version NAME, the matrix expects an id."""
+
+    def test_a_candidate_boots_under_its_display_name(self):
+        self.assertTrue(same_minecraft_version("26.3 Release Candidate 3", "26.3-rc-3"))
+        self.assertTrue(same_minecraft_version("1.21.11 Release Candidate 1", "1.21.11-rc1"))
+        self.assertTrue(same_minecraft_version("26.3 Pre-Release 1", "26.3-pre-1"))
+        self.assertTrue(same_minecraft_version("26.3 Snapshot 10", "26.3-snapshot-10"))
+
+    def test_a_different_version_is_still_caught(self):
+        self.assertFalse(same_minecraft_version("26.1.1", "26.1"))
+        self.assertFalse(same_minecraft_version("26.3 Release Candidate 2", "26.3-rc-3"))
+        self.assertFalse(same_minecraft_version("26.3", "26.3-rc-3"))
+
+
+class LatestVersionTest(unittest.TestCase):
+    """What the auto-update targets, for a given minecraft.channels."""
+
+    MANIFEST = {
+        "latest": {"release": "26.1.2", "snapshot": "26.2-rc-1"},
+        "versions": [
+            {"id": "26.2-rc-1", "type": "snapshot", "releaseTime": "2026-09-10T10:00:00+00:00"},
+            {"id": "26.2-pre-1", "type": "snapshot", "releaseTime": "2026-09-03T10:00:00+00:00"},
+            {"id": "26.2-snapshot-4", "type": "snapshot", "releaseTime": "2026-08-20T10:00:00+00:00"},
+            {"id": "26.1.2", "type": "release", "releaseTime": "2026-08-01T10:00:00+00:00"},
+            {"id": "b1.7.3", "type": "old_beta", "releaseTime": "2026-09-30T10:00:00+00:00"},
+        ],
+    }
+
+    def setUp(self):
+        patcher = mock.patch.object(versions, "_manifest_cache", self.MANIFEST)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_releases_only_by_default(self):
+        self.assertEqual(latest_minecraft_version(["release"]), "26.1.2")
+
+    def test_the_newest_of_the_listed_channels_wins(self):
+        self.assertEqual(latest_minecraft_version(["release", "rc"]), "26.2-rc-1")
+        self.assertEqual(latest_minecraft_version(["release", "pre"]), "26.2-pre-1")
+
+    def test_only_the_listed_channels_count(self):
+        """No release in the list means no release, even a newer one."""
+        self.assertEqual(latest_minecraft_version(["snapshot"]), "26.2-snapshot-4")
+
+    def test_order_comes_from_the_release_time_not_the_manifest(self):
+        shuffled = dict(self.MANIFEST, versions=list(reversed(self.MANIFEST["versions"])))
+        with mock.patch.object(versions, "_manifest_cache", shuffled):
+            self.assertEqual(latest_minecraft_version(["release", "rc", "pre"]), "26.2-rc-1")
+
+    def test_old_alpha_and_beta_never_qualify(self):
+        self.assertNotEqual(latest_minecraft_version(list(versions.CHANNELS)), "b1.7.3")
+
+    def test_nothing_matching_is_an_error(self):
+        empty = {"versions": [v for v in self.MANIFEST["versions"] if v["type"] == "release"]}
+        with mock.patch.object(versions, "_manifest_cache", empty):
+            with self.assertRaises(Failure):
+                latest_minecraft_version(["rc"])
 
 
 class McLabelTest(unittest.TestCase):
@@ -88,6 +171,15 @@ class VersionsToTestTest(unittest.TestCase):
 
     def test_non_numeric_entries_are_dropped(self):
         self.assertEqual(versions_to_test("26.1.1", ["26.1", "24w14a"]), ["26.1", "26.1.1"])
+
+    def test_a_non_numeric_target_is_the_one_version_to_boot(self):
+        """It used to be filtered out with the rest, leaving a matrix of nothing."""
+        self.assertEqual(versions_to_test("26.2-rc-1", []), ["26.2-rc-1"])
+        self.assertEqual(versions_to_test("26.2-snapshot-3", ["26.2-snapshot-2"]), ["26.2-snapshot-3"])
+
+    def test_a_candidate_is_its_own_series(self):
+        """So moving to the release resets what the candidate's jar claimed."""
+        self.assertNotEqual(series_of("26.2-rc-1"), series_of("26.2"))
 
 
 class CompatBoundsTest(unittest.TestCase):
@@ -169,6 +261,21 @@ class ModVersionTemplateTest(unittest.TestCase):
         self.assertEqual(
             parse_mod_version("{mc}-{mod}", "26.1.x-1.1.0-beta.2"),
             {"mc": "26.1.x", "mod": "1.1.0-beta.2"},
+        )
+
+    def test_a_candidate_label_keeps_its_dashes(self):
+        """The lazy split read "26.2-rc-1-1.1.0" as 26.2 and "rc-1-1.1.0"."""
+        self.assertEqual(
+            parse_mod_version("{mc}-{mod}", "26.2-rc-1-1.1.0"),
+            {"mc": "26.2-rc-1", "mod": "1.1.0"},
+        )
+        self.assertEqual(
+            parse_mod_version("{mc}-{mod}", "26.2-snapshot-3-1.1.0-beta.2"),
+            {"mc": "26.2-snapshot-3", "mod": "1.1.0-beta.2"},
+        )
+        self.assertEqual(
+            parse_mod_version("{mod}-{mc}", "1.1.0-beta-26.2-rc-1"),
+            {"mod": "1.1.0-beta", "mc": "26.2-rc-1"},
         )
 
     def test_the_modrinth_style_format(self):

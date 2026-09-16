@@ -82,7 +82,18 @@ dependencies {
 | `publishCurseForge` | the release job | only when `curseforge` is in `release.stores` |
 
 The two publish tasks come from your own build script (`minotaur`,
-`cf-gradle-plugin`, and so on). mc-bump only calls them. No task backs `github`
+`cf-gradle-plugin`, and so on). mc-bump only calls them, with
+`-Prelease_type=release|beta|alpha` derived from the Minecraft channel. Read it if
+you publish release candidates or snapshots
+([`release.channels`](Configuration#publishing-a-release-candidate-or-a-snapshot)):
+
+```groovy
+modrinth {
+    versionType = project.findProperty("release_type") ?: "release"
+}
+```
+
+No task backs `github`
 in `release.stores`: the release job attaches the jars `build` already produced.
 
 ### `fabric.mod.json`
@@ -149,7 +160,7 @@ on:
   workflow_dispatch:
     inputs:
       minecraft-version:
-        description: Force a specific Minecraft version. Empty = latest release.
+        description: Force a specific Minecraft version. Empty = latest version in minecraft.channels.
         type: string
       force:
         description: Continue even if the repo is already on that version.

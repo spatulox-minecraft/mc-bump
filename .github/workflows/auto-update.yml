@@ -21,7 +21,7 @@ on:
         default: v1
         required: false
       minecraft-version:
-        description: Force a specific Minecraft version. Empty = latest release.
+        description: Force a specific Minecraft version. Empty = latest version in minecraft.channels.
         type: string
         default: ""
         required: false

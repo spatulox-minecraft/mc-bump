@@ -117,13 +117,13 @@ whole matrix after each dependency bump.
 | Input | Type | Default | |
 |---|---|---|---|
 | `mc-bump-ref` | string | `v1` | |
-| `minecraft-version` | string | `""` | Force a version. Empty means the latest Mojang release. |
+| `minecraft-version` | string | `""` | Force a version. Empty means the latest Mojang version in `minecraft.channels`. |
 | `force` | boolean | `false` | Continue even if the repo is already on that version. |
 
 ### The sequence
 
 ```
-1. resolve       latest Mojang release, then the loader, API and build plugin for it
+1. resolve       latest Mojang version in minecraft.channels, then the loader, API and build plugin for it
 2. commit        the bump and the optimistically widened compatibility range
 3. unit tests    seconds, and a broken unit test explains a broken matrix
 4. matrix        every claimed version, WITH the escalation ladder
@@ -196,16 +196,20 @@ config ── check ── matrix ──┬── publish-modrinth ──┬─�
 
 ### `check`, refuses early and writes nothing
 
-Three guards, all cheap, before the expensive matrix starts:
+Four guards, all cheap, before the expensive matrix starts:
 
 1. **already released?** The release tag exists, so there is nothing to do. The
    whole condition is idempotent, which is what makes re-running always safe.
-2. **is the version actually proven?** `minecraft_version` must appear in
+2. **is this channel published?** A `minecraft_version` whose channel (`rc`,
+   `pre`, `snapshot`) is not in `release.channels` publishes nothing, and the run
+   stays green. See
+   [Configuration](Configuration#publishing-a-release-candidate-or-a-snapshot).
+3. **is the version actually proven?** `minecraft_version` must appear in
    `supported_minecraft_versions`. Merging a *draft* pull request, one where the
    matrix failed, leaves the version bumped while the revert restored the shorter
    supported list. Publishing then would ship a jar built against the new version
    while announcing the old one.
-3. **are the tokens there?** A missing or expired token is a two second check
+4. **are the tokens there?** A missing or expired token is a two second check
    here, or a ninety minute one after the matrix.
 
 ### `matrix`

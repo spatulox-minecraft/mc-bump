@@ -6,7 +6,7 @@ the loader metadata. Standard library only, except PyYAML.
 
 Examples
 --------
-    # latest Mojang release
+    # latest Mojang version in minecraft.channels (releases only by default)
     python3 mc-bump.py
 
     # specific version
@@ -56,7 +56,12 @@ from lib.common import Failure  # noqa: E402
 from lib.github import output as github_output  # noqa: E402
 from lib.gradle import read_property  # noqa: E402
 from lib.matrix import run_with_escalation  # noqa: E402
-from lib.versions import latest_minecraft_release, java_version_for, series_of  # noqa: E402
+from lib.versions import (  # noqa: E402
+    channel_of,
+    java_version_for,
+    latest_minecraft_version,
+    series_of,
+)
 
 ESCALATION_LADDER = "scripts/test-with-escalation.py"
 
@@ -94,7 +99,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "minecraft_version",
         nargs="?",
-        help="target version (e.g. 26.2). Defaults to the latest Mojang release.",
+        help="target version (e.g. 26.2). Defaults to the latest Mojang "
+        "version in minecraft.channels (releases only by default).",
     )
     parser.add_argument("--root", help="mod repository (default: walk up from the cwd)")
     parser.add_argument(
@@ -253,10 +259,18 @@ def main() -> int:
 
     # -- the update itself -------------------------------------------------
     current, _ = update_module.current_versions(project)
-    target = args.minecraft_version or latest_minecraft_release()
+    # A version given on the command line is a deliberate choice, so the channels
+    # only decide what "latest" means.
+    target = args.minecraft_version or latest_minecraft_version(project.update_channels)
+    channel = channel_of(target)
     log(f"Loader          : {loader.name}")
     log(f"Current version : {current}")
-    log(f"Target version  : {target}")
+    log(f"Target version  : {target} ({channel})")
+    if args.minecraft_version and channel not in project.update_channels:
+        log(
+            f"  note: {channel} is not in minecraft.channels "
+            f"({','.join(project.update_channels)}), targeted because it was asked for."
+        )
 
     properties = project.paths.gradle_properties.read_text(encoding="utf-8")
     frozen_loader = read_property(properties, keys["loader"])
@@ -269,6 +283,7 @@ def main() -> int:
         "status": "",
         "loader": loader.name,
         "minecraft_version": target,
+        "channel": channel,
         "previous_version": current,
         "series": series_of(target),
         "loader_version": frozen_loader,

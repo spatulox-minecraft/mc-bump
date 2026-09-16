@@ -215,6 +215,25 @@ class MatrixStatusTest(unittest.TestCase):
             self.assertIn("not found", blocks[0].log)
 
 
+class PrBodyChannelTest(unittest.TestCase):
+    FIELDS = dict(
+        mod_id="my-mod", previous="26.1.2", loader_name="fabric-loader",
+        loader_version="0.19.3", api_name="fabric-api", api_version="0.155.2",
+        available_loader="0.19.3", available_api="0.155.2", buildtool_name="loom",
+        buildtool_version="1.17.18", java="25", mod_version="26.2-1.1.0",
+        compat_range="=26.2", tests_passed=True, blocks=[], escalation="",
+        run_url="https://example.invalid/run", workflow_file="auto-update.yml",
+    )
+
+    def test_a_release_carries_no_warning(self):
+        self.assertNotIn("not a release", report.pr_body(minecraft="26.2", **self.FIELDS))
+
+    def test_a_candidate_says_merging_may_not_publish(self):
+        body = report.pr_body(minecraft="26.2-rc-1", **self.FIELDS)
+        self.assertIn("**rc**, not a release", body)
+        self.assertIn("release.channels", body)
+
+
 class EscalationTest(unittest.TestCase):
     def test_no_escalation_renders_nothing(self):
         self.assertEqual(report.escalation_section(""), "")
