@@ -239,6 +239,10 @@ def _newest_in_line(
 
     The Gradle a candidate needs is not a filter: the wrapper follows it. Java
     is, since java_version comes from Minecraft and nothing here may change it.
+
+    A release whose requirements cannot be read is unknown, not requirement
+    free: an older one known to run wins over it, and it is only taken when no
+    known one does, since then neither Java nor the wrapper can be checked.
     """
     ordered = sorted(
         (version for version in set(candidates) if in_line(version, line)),
@@ -247,10 +251,15 @@ def _newest_in_line(
     )
     if not ordered:
         raise Failure(f"no stable {label} release in the {line} line")
+    unknown = None
     for version in ordered:
         plugin = requirements(version)
-        if plugin is None or not plugin.java or not java or plugin.java <= java:
+        if plugin is None:
+            unknown = unknown or version
+        elif not plugin.java or not java or plugin.java <= java:
             return version
+    if unknown:
+        return unknown
     raise Failure(
         f"every {label} {line}.x requires a newer Java than java_version {java}"
     )
