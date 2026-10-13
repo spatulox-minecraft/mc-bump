@@ -250,11 +250,15 @@ jobs:
           java-version: ${{ needs.config.outputs.java }}
       - uses: gradle/actions/setup-gradle@v5
 
-      - uses: ./.mc-bump/.github/actions/virtual-display
+      # A display that fails is a gametest that fails: reported, and blocking
+      # only when the mod says so, like any other gametest failure.
+      - name: Virtual display
+        continue-on-error: true
+        uses: ./.mc-bump/.github/actions/virtual-display
 
       # A client that finds no backend hangs instead of exiting. The step
       # timeout fails only this step, so the report below still runs; the job
-      # timeout would cancel it all.
+      # timeout would cancel it all. Without a display it fails at once.
       - name: Run the client gametest
         id: gametest
         continue-on-error: true
@@ -263,6 +267,10 @@ jobs:
           TASK: ${{ needs.config.outputs.client_gametest_task }}
         run: |
           set -o pipefail
+          if [ -z "${DISPLAY:-}" ]; then
+            echo "No virtual display: see the Virtual display step." | tee gametest.log
+            exit 1
+          fi
           chmod +x gradlew
           ./gradlew "$TASK" --stacktrace --console=plain 2>&1 | tee gametest.log
 

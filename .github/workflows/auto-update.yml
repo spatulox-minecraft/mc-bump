@@ -192,12 +192,17 @@ jobs:
       # Declared non blocking by most mods, which is why it never fails the run
       # here — but it lands in the pull request table and in the issue all the
       # same. An unrun test rots silently.
+      #
+      # The display is part of that non blocking test: an apt mirror or an Xvfb
+      # that fails must not skip the verdict and the pull request below.
       - name: Virtual display
         if: steps.update.outputs.status == 'updated' && steps.setup.outputs.gametest == 'true'
+        continue-on-error: true
         uses: ./.mc-bump/.github/actions/virtual-display
 
       # A client that finds no backend hangs instead of exiting: the step
       # timeout keeps it from eating the job timeout and the steps after it.
+      # Without a display it fails at once, and the report says why.
       - name: Client gametest
         id: gametest
         if: steps.update.outputs.status == 'updated' && steps.setup.outputs.gametest == 'true'
@@ -207,6 +212,10 @@ jobs:
           TASK: ${{ steps.setup.outputs.client_gametest_task }}
         run: |
           set -o pipefail
+          if [ -z "${DISPLAY:-}" ]; then
+            echo "No virtual display: see the Virtual display step." | tee gametest.log
+            exit 1
+          fi
           ./gradlew "$TASK" --stacktrace --console=plain 2>&1 | tee gametest.log
 
       - if: steps.gametest.outcome != ''
