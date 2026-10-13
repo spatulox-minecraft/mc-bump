@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """Regenerate the Minecraft -> build plugin / Gradle table from Fabric's example mod.
 
-fabric-example-mod keeps one branch per Minecraft version. The commit where a
-branch first sets `minecraft_version` to its own name is the toolchain Fabric
-built that version with: its Loom line and its Gradle wrapper. Later commits
-backport newer tooling to every branch at once, so they say nothing about what
-a version NEEDS.
+fabric-example-mod keeps one branch per Minecraft version. The commit that
+introduced a version is the toolchain Fabric built that version with: its Loom
+line and its Gradle wrapper. Later commits backport newer tooling to every branch
+at once, so they say nothing about what a version NEEDS.
+
+That commit is searched on EVERY branch, not only the version's own, since
+Fabric's template generator recreated the old branches in 2026 with that year's
+tooling. Which commit wins is lib/toolchain.py's introducing_commits().
 
 Run by .github/workflows/internal-toolchain.yml every week, and by hand:
 
@@ -32,7 +35,9 @@ from lib.toolchain import (  # noqa: E402
     Toolchain,
     dump_table,
     gradle_from_wrapper,
+    introducing_commits,
     loom_from_example,
+    minecraft_from_example,
 )
 from lib.versions import parse_version  # noqa: E402
 
@@ -52,26 +57,30 @@ def show(repo: Path, commit: str, path: str) -> str:
     return git(repo, "show", f"{commit}:{path}", check=False)
 
 
-def toolchain_of(repo: Path, branch: str) -> Toolchain | None:
-    """The toolchain of `branch` at the commit that set it to its own version."""
-    wanted = f"minecraft_version={branch}"
-    history = git(repo, "log", "--reverse", "--format=%H", branch, "--", "gradle.properties")
-    for commit in history.split():
-        properties = show(repo, commit, "gradle.properties")
-        if wanted not in (line.strip() for line in properties.splitlines()):
-            continue
-        build_script = show(repo, commit, "build.gradle") or show(
-            repo, commit, "build.gradle.kts"
-        )
-        loom = loom_from_example(properties, build_script)
-        gradle = gradle_from_wrapper(
-            show(repo, commit, "gradle/wrapper/gradle-wrapper.properties")
-        )
-        if loom and gradle:
-            return Toolchain(loom, gradle)
-        print(f"  {branch}: unreadable at {commit[:9]} (loom={loom}, gradle={gradle})")
-        return None
-    print(f"  {branch}: no commit sets minecraft_version={branch}")
+def history(repo: Path):
+    """(commit, subject, minecraft_version) of every branch, oldest first."""
+    log = git(
+        repo, "log", "--all", "--reverse", "--date-order", "--format=%H %s",
+        "--", "gradle.properties",
+    )
+    for line in log.splitlines():
+        commit, _, subject = line.partition(" ")
+        yield commit, subject, minecraft_from_example(show(repo, commit, "gradle.properties"))
+
+
+def toolchain_at(repo: Path, minecraft: str, commit: str) -> Toolchain | None:
+    """The Loom line and the Gradle of the example mod at `commit`."""
+    properties = show(repo, commit, "gradle.properties")
+    build_script = show(repo, commit, "build.gradle") or show(
+        repo, commit, "build.gradle.kts"
+    )
+    loom = loom_from_example(properties, build_script)
+    gradle = gradle_from_wrapper(
+        show(repo, commit, "gradle/wrapper/gradle-wrapper.properties")
+    )
+    if loom and gradle:
+        return Toolchain(loom, gradle)
+    print(f"  {minecraft}: unreadable at {commit[:9]} (loom={loom}, gradle={gradle})")
     return None
 
 
@@ -87,13 +96,17 @@ def build_table(source: str) -> dict[str, Toolchain]:
             raise Failure(f"cannot clone {source}: {completed.stderr.strip()}")
 
         branches = git(repo, "for-each-ref", "--format=%(refname:short)", "refs/heads")
+        first = introducing_commits(history(repo))
         table = {}
         for branch in branches.split():
             # Only branches named after a release: a candidate or a snapshot is
             # governed by the release it leads to (see lib/toolchain.py).
             if parse_version(branch) is None:
                 continue
-            toolchain = toolchain_of(repo, branch)
+            if branch not in first:
+                print(f"  {branch}: only backfilled by the generator, left out")
+                continue
+            toolchain = toolchain_at(repo, branch, first[branch])
             if toolchain:
                 table[branch] = toolchain
     if not table:
