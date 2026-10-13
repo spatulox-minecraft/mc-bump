@@ -142,6 +142,25 @@ class PlanTest(unittest.TestCase):
         )
         self.assertEqual(plan.buildtool, "1.17.18")
 
+    def test_a_known_release_wins_over_a_newer_unreadable_one(self):
+        """fabric-loom-1.17.21.module missing: its Java and Gradle are unknown."""
+        requirements = {k: v for k, v in REQUIREMENTS.items() if k != "1.17.21"}
+        plan = plan_toolchain(
+            minecraft="26.2", table=TABLE, current_buildtool="1.15.4", current_gradle="9.3.0",
+            java=25, candidates=lambda: STABLE, requirements=requirements.get, label="fabric-loom",
+        )
+        self.assertEqual(plan.buildtool, "1.17.18")
+
+    def test_an_unreadable_release_is_taken_when_no_known_one_runs(self):
+        requirements = {
+            "1.17.18": Requirements(gradle="9.5.0", java=25),
+        }
+        plan = plan_toolchain(
+            minecraft="26.2", table=TABLE, current_buildtool="1.15.4", current_gradle="9.3.0",
+            java=21, candidates=lambda: STABLE, requirements=requirements.get, label="fabric-loom",
+        )
+        self.assertEqual(plan.buildtool, "1.17.21")
+
     def test_no_release_of_the_line_is_an_error(self):
         with self.assertRaises(Failure) as caught:
             self.plan("26.2", "1.15.4", "9.3.0", stable=["1.15.4", "1.18.1"])
