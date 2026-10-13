@@ -11,8 +11,8 @@ from lib.gradle import (
     ModPaths,
     gradle_version_key,
     read_wrapper_gradle_version,
-    set_wrapper_gradle_version,
     with_wrapper_gradle_version,
+    wrapper_for,
 )
 
 WRAPPER = """\
@@ -76,20 +76,27 @@ class WrapperRewriteTest(WrapperVersionTest):
         with self.assertRaises(Failure):
             with_wrapper_gradle_version("distributionUrl=https\\://example.invalid/x.zip\n", "9.5.1")
 
-    def test_writing_the_version_already_there_changes_nothing(self):
+    def test_the_version_already_there_is_no_change(self):
         self.write(WRAPPER.format(version="9.5.1", kind="bin"))
-        self.assertFalse(set_wrapper_gradle_version(self.paths, "9.5.1", dry_run=False))
+        self.assertIsNone(wrapper_for(self.paths, "9.5.1", lambda _n: self.fail("looked up")))
 
-    def test_dry_run_writes_nothing(self):
+    def test_the_new_wrapper_is_returned_not_written(self):
         text = WRAPPER.format(version="9.3.0", kind="bin")
         self.write(text)
-        self.assertTrue(set_wrapper_gradle_version(self.paths, "9.5.1", dry_run=True))
+        self.assertIn("gradle-9.5.1-bin.zip", wrapper_for(self.paths, "9.5.1"))
         self.assertEqual(self.paths.gradle_wrapper.read_text(encoding="utf-8"), text)
 
-    def test_the_wrapper_is_rewritten(self):
-        self.write(WRAPPER.format(version="9.3.0", kind="bin"))
-        self.assertTrue(set_wrapper_gradle_version(self.paths, "9.5.1", dry_run=False))
-        self.assertEqual(read_wrapper_gradle_version(self.paths), "9.5.1")
+    def test_an_unreachable_checksum_writes_nothing(self):
+        """Read before the update's first write: a failure leaves the mod as it was."""
+        text = WRAPPER.format(version="9.3.0", kind="bin") + "distributionSha256Sum=" + "a" * 64 + "\n"
+        self.write(text)
+
+        def unreachable(_name):
+            raise Failure("cannot reach services.gradle.org")
+
+        with self.assertRaises(Failure):
+            wrapper_for(self.paths, "9.5.1", unreachable)
+        self.assertEqual(self.paths.gradle_wrapper.read_text(encoding="utf-8"), text)
 
 
 class GradleVersionKeyTest(unittest.TestCase):
