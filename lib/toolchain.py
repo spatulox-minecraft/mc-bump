@@ -24,7 +24,7 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Iterable
 
 from .common import Failure
 from .gradle import gradle_version_key, wrapper_gradle_version
@@ -259,10 +259,48 @@ def _newest_in_line(
 # --------------------------------------------------------------------------
 # Reading Fabric's example mod (used by scripts/refresh-toolchain.py)
 # --------------------------------------------------------------------------
-_LOOM_PROPERTY = re.compile(r"^loom_version\s*=\s*(\S+)\s*$", re.MULTILINE)
+# Older example mods indent their properties with a tab.
+_LOOM_PROPERTY = re.compile(r"^[ \t]*loom_version[ \t]*=[ \t]*(\S+)\s*$", re.MULTILINE)
+_MINECRAFT_PROPERTY = re.compile(r"^[ \t]*minecraft_version[ \t]*=[ \t]*(\S+)\s*$", re.MULTILINE)
 _LOOM_PLUGIN = re.compile(
     r"""id\s*\(?\s*["'](?:net\.fabricmc\.)?fabric-loom["']\s*\)?\s*version\s*\(?\s*["']([^"'$]+)["']"""
 )
+
+# The subject of every commit Fabric's template generator pushes.
+GENERATED = "Deployment from commit "
+
+
+def minecraft_from_example(properties: str) -> str | None:
+    match = _MINECRAFT_PROPERTY.search(properties)
+    return match.group(1) if match else None
+
+
+def introducing_commits(history: Iterable[tuple[str, str, str | None]]) -> dict[str, str]:
+    """Minecraft version -> the example mod commit that introduced it.
+
+    `history` is (commit, subject, minecraft_version), oldest first, across every
+    branch. The first commit setting a version wins: later ones backport newer
+    tooling and say nothing about what that version needs.
+
+    In 2026 Fabric's template generator recreated the old branches, with that
+    year's tooling: by its commits alone, 1.16.5 would need Loom 1.15. So a
+    hand-made commit wins over a generated one, and a version only the generator
+    ever set is kept only when it is newer than every hand-made one, which is how
+    Fabric publishes new versions since 26.1. Below that it is a backfill and is
+    left out: the closest release below then governs it.
+    """
+    handmade: dict[str, str] = {}
+    generated: dict[str, str] = {}
+    for commit, subject, minecraft in history:
+        if minecraft is None or parse_version(minecraft) is None:
+            continue
+        seen = generated if subject.startswith(GENERATED) else handmade
+        seen.setdefault(minecraft, commit)
+    newest_handmade = max((parse_version(v) for v in handmade), default=())
+    return {
+        **{v: c for v, c in generated.items() if parse_version(v) > newest_handmade},
+        **handmade,
+    }
 
 
 def buildtool_line(raw: str) -> str:

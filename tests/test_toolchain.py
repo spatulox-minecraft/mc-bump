@@ -6,6 +6,7 @@ import json
 import unittest
 
 from lib.common import Failure
+from lib.gradle import gradle_version_key
 from lib.loaders.fabric import TOOLCHAIN_TABLE
 from lib.toolchain import (
     Requirements,
@@ -14,12 +15,16 @@ from lib.toolchain import (
     dump_table,
     gradle_from_wrapper,
     in_line,
+    introducing_commits,
     load_table,
     loom_from_example,
+    minecraft_from_example,
     plan_toolchain,
     required_for,
     satisfies,
+    version_numbers,
 )
+from lib.versions import parse_version
 
 TABLE = {
     "1.21": Toolchain("1.6", "8.7"),
@@ -186,6 +191,42 @@ class ExampleModParsingTest(unittest.TestCase):
             "9.5.1",
         )
 
+    def test_an_indented_property_is_read(self):
+        """The 2021 example mod indented its properties with a tab."""
+        properties = "\tminecraft_version=1.17\r\n\tloom_version=0.8-SNAPSHOT\r\n"
+        self.assertEqual(minecraft_from_example(properties), "1.17")
+        self.assertEqual(loom_from_example(properties, ""), "0.8")
+
+    def test_an_empty_property_does_not_read_the_next_line(self):
+        self.assertIsNone(minecraft_from_example("minecraft_version=\nloader_version=0.18.6\n"))
+
+
+DEPLOYMENT = "Deployment from commit FabricMC/fabricmc.net@5059c39"
+
+
+class IntroducingCommitsTest(unittest.TestCase):
+    def test_the_first_commit_setting_a_version_wins(self):
+        history = [("a", "1.21.1", "1.21.1"), ("b", "Update Loom", "1.21.1")]
+        self.assertEqual(introducing_commits(history), {"1.21.1": "a"})
+
+    def test_a_hand_made_commit_wins_over_an_older_generated_one(self):
+        history = [("gen", DEPLOYMENT, "1.21.1"), ("old", "1.21.1", "1.21.1")]
+        self.assertEqual(introducing_commits(history), {"1.21.1": "old"})
+
+    def test_the_generator_backfilling_an_old_version_is_left_out(self):
+        """1.16.5 regenerated in 2026 does not need Loom 1.15."""
+        history = [("old", "1.21.1", "1.21.1"), ("gen", DEPLOYMENT, "1.16.5")]
+        self.assertEqual(introducing_commits(history), {"1.21.1": "old"})
+
+    def test_a_version_only_the_generator_published_is_kept_when_newer(self):
+        """Since 26.1 Fabric publishes new versions through the generator only."""
+        history = [("old", "26.1", "26.1"), ("gen", DEPLOYMENT, "26.2")]
+        self.assertEqual(introducing_commits(history), {"26.1": "old", "26.2": "gen"})
+
+    def test_snapshots_and_unreadable_commits_are_ignored(self):
+        history = [("a", "19w03c", "19w03c"), ("b", "no properties", None)]
+        self.assertEqual(introducing_commits(history), {})
+
 
 class ShippedTableTest(unittest.TestCase):
     """The file every update reads. A broken one would stop all toolchain moves."""
@@ -201,6 +242,21 @@ class ShippedTableTest(unittest.TestCase):
             with self.subTest(minecraft=minecraft):
                 self.assertTrue(toolchain.buildtool[0].isdigit())
                 self.assertTrue(toolchain.gradle[0].isdigit())
+
+    def test_a_newer_minecraft_never_needs_an_older_toolchain(self):
+        """What required_for() assumes. Run before the weekly refresh moves a tag,
+        so a table read from regenerated branches (1.16.5 needing Loom 1.15 while
+        1.17 needs 0.8) is never released."""
+        table = load_table(TOOLCHAIN_TABLE)
+        ordered = sorted(table, key=parse_version)
+        for older, newer in zip(ordered, ordered[1:]):
+            with self.subTest(older=older, newer=newer):
+                self.assertLessEqual(
+                    version_numbers(table[older].buildtool), version_numbers(table[newer].buildtool)
+                )
+                self.assertLessEqual(
+                    gradle_version_key(table[older].gradle), gradle_version_key(table[newer].gradle)
+                )
 
 
 if __name__ == "__main__":
