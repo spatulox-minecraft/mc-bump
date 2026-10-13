@@ -57,7 +57,7 @@ from lib.github import output as github_output  # noqa: E402
 from lib.gradle import (  # noqa: E402
     read_property,
     read_wrapper_gradle_version,
-    set_wrapper_gradle_version,
+    wrapper_for,
 )
 from lib.loaders.base import BuildEnv  # noqa: E402
 from lib.matrix import run_with_escalation  # noqa: E402
@@ -344,6 +344,13 @@ def main() -> int:
     else:
         log(f"  java_version = {java}")
 
+    # The wrapper moves in the same pass as the build plugin that needs it. Its
+    # new text, and the checksum Gradle publishes for it, are read before any
+    # file is written: a network failure must not leave the mod half updated.
+    new_wrapper = (
+        wrapper_for(project.paths, resolved.gradle) if resolved.gradle and gradle else None
+    )
+
     # Snapshot the compatibility claims before touching anything, so a failed
     # matrix can restore them with --revert-compat.
     if not args.dry_run:
@@ -361,12 +368,9 @@ def main() -> int:
         if java is not None
         else False
     )
-    # The wrapper moves in the same pass as the build plugin that needs it.
-    gradle_changed = (
-        set_wrapper_gradle_version(project.paths, resolved.gradle, args.dry_run)
-        if resolved.gradle and gradle
-        else False
-    )
+    gradle_changed = new_wrapper is not None
+    if gradle_changed and not args.dry_run:
+        project.paths.gradle_wrapper.write_text(new_wrapper, encoding="utf-8")
 
     # The range has to be widened NOW, before the tests: otherwise the loader
     # refuses to load the mod on the new version and no version could ever be

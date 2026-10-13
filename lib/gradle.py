@@ -146,18 +146,19 @@ def published_checksum(distribution: str) -> str:
     return value
 
 
-def set_wrapper_gradle_version(paths: ModPaths, version: str, dry_run: bool) -> bool:
-    """Point the mod's wrapper at `version`. False when it already does."""
+def wrapper_for(
+    paths: ModPaths, version: str, checksum: Callable[[str], str] = published_checksum
+) -> str | None:
+    """The mod's wrapper properties pointing at `version`. None when they already do.
+
+    Writes nothing, and may fetch the published checksum: call it before the
+    update writes its first file, so a network failure leaves the mod as it was
+    rather than half updated.
+    """
     original = paths.gradle_wrapper.read_text(encoding="utf-8")
     if wrapper_gradle_version(original) == version:
-        return False
-    if not dry_run:
-        write_preserving_final_newline(
-            paths.gradle_wrapper,
-            original,
-            with_wrapper_gradle_version(original, version, published_checksum),
-        )
-    return True
+        return None
+    return with_wrapper_gradle_version(original, version, checksum)
 
 
 def gradle_version_key(version: str) -> tuple:
