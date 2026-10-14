@@ -93,10 +93,12 @@ class Loader(ABC):
         """
 
     @abstractmethod
-    def resolve_one(
-        self, role: str, minecraft_version: str, env: BuildEnv = BuildEnv()
-    ) -> str | None:
-        """A single role, for the escalation ladder. role in gradle_keys."""
+    def resolve_one(self, role: str, minecraft_version: str) -> str | None:
+        """A single role, for the escalation ladder: one of escalation_rungs().
+
+        Not the build plugin: it moves with the Gradle wrapper it needs, and only
+        resolve() knows what the mod builds with today.
+        """
 
     @abstractmethod
     def escalation_rungs(self) -> list[Rung]:
