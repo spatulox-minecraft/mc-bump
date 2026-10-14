@@ -110,16 +110,12 @@ class FabricLoader(Loader):
             extra={"buildtool_note": plan.buildtool_note, "gradle_note": plan.gradle_note},
         )
 
-    def resolve_one(
-        self, role: str, minecraft_version: str, env: BuildEnv = BuildEnv()
-    ) -> str | None:
+    def resolve_one(self, role: str, minecraft_version: str) -> str | None:
         if role == "loader":
             return self._loader_for(minecraft_version)
         if role == "api":
             return self._latest_fabric_api(minecraft_version)
-        if role == "buildtool":
-            return self._toolchain(minecraft_version, env, None).buildtool
-        raise Failure(f"unknown role '{role}' for the fabric loader")
+        raise Failure(f"'{role}' is not an escalation rung of the fabric loader")
 
     def _toolchain(self, minecraft_version: str, env: BuildEnv, pinned: str | None):
         return plan_toolchain(
