@@ -174,13 +174,22 @@ since a bump is a hypothesis until the matrix proves it.
 
 Minecraft needs no Gradle. The build plugin does: fabric-loom 1.18.1 refuses to
 load on a Gradle older than 9.7.0, and a build that fails there fails before any
-test. Fabric builds its own example mod with one pair per Minecraft version, and
-mc-bump ships that pair as a table, `lib/loaders/fabric_toolchain.json`:
+test. Fabric built its own example mod with one pair per Minecraft version, and
+mc-bump ships those pairs as a table,
+[`lib/loaders/fabric_toolchain.json`](https://github.com/spatulox-minecraft/mc-bump/blob/main/lib/loaders/fabric_toolchain.json),
+from `1.14.4` to the latest release. An excerpt:
 
 | Minecraft | fabric-loom | Gradle |
 |---|---|---|
+| `1.16.5` | `0.5` | `6.8` |
+| `1.20.1` | `1.2` | `8.1.1` |
+| `1.21.1` | `1.7` | `8.10` |
+| `1.21.11` | `1.14` | `9.2.1` |
 | `26.1` | `1.15` | `9.3.0` |
 | `26.2` | `1.17` | `9.5.1` |
+
+A newer Minecraft never needs an older pair than the one before it, and the
+tests check it on every refresh.
 
 An update compares your mod to the entry for the target, and moves only what is
 **below** it:
@@ -192,24 +201,44 @@ An update compares your mod to the entry for the target, and moves only what is
 | Loom `1.15.4`, Gradle `9.3.0` | `1.17` / `9.5.1` | Loom `1.17.21`, wrapper `9.5.1` |
 
 - The Loom taken is the newest release **of the required line**, not the newest
-  overall, and one your `java_version` can run.
+  overall, and one your `java_version` can run. Its Java and Gradle come from the
+  module metadata Fabric publishes with it. A release without readable metadata
+  is only taken when no release of the line with known requirements fits.
 - The wrapper goes to the highest of the table's Gradle and the one that Loom
   declares in its module metadata. Only `gradle-wrapper.properties` changes: the
-  `distributionUrl`, and `distributionSha256Sum` when you pin one.
+  `distributionUrl`, and `distributionSha256Sum` when you pin one. That checksum
+  is fetched from Gradle before any file is written, so a failure there leaves
+  your mod untouched.
 - A release candidate or a snapshot is governed by the release it leads to, and a
-  version the table does not list yet by the closest release below it.
-- A version older than the table moves nothing.
+  version the table does not list by the closest release below it.
+- A version older than the table (before `1.14.4`) moves nothing.
 
 The pull request carries a build plugin row and a Gradle wrapper row, each saying
 whether it moved and why.
 
+### Where the table comes from
+
 The table is rebuilt every week from
-[fabric-example-mod](https://github.com/FabricMC/fabric-example-mod): for each
-branch, the commit that first set `minecraft_version` to that version. Later
-commits backport newer tooling to every branch at once and say nothing about what
-a version needs. Branches Fabric recreated give its current pair rather than the
-historical minimum, which can move an old mod further than strictly needed, never
-less.
+[fabric-example-mod](https://github.com/FabricMC/fabric-example-mod), which keeps
+one branch per Minecraft version. Each version is read at the commit that
+**introduced** it: later commits backport newer tooling to every branch at once
+and say nothing about what a version needs.
+
+That commit is searched on every branch, not only the version's own. In 2026
+Fabric's template generator recreated the old branches with that year's tooling
+(commits named `Deployment from commit FabricMC/fabricmc.net@…`). Read from its
+own branch alone, `1.16.5` would need Loom `1.15` and Gradle `9.3.0`, and an
+update to it would fail on Java 8. So:
+
+- a hand-made commit wins over a generated one: `1.21.1` is read from its 2024
+  commit, Loom `1.7` and Gradle `8.10`;
+- a version only the generator ever set counts when it is **newer** than every
+  hand-made one, which is how Fabric publishes since `26.1` (`26.2`, `26.3`);
+- below that it is a backfill and is left out of the table, so the closest
+  release below governs it (`1.21.9` follows `1.21.8`).
+
+The refresh runs the tests before it commits, and moves `@v1` and `@v2` only
+when they were already on their branch head.
 
 `--loom VERSION` pins the build plugin instead. The wrapper still follows what
 that Loom declares.

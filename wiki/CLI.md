@@ -204,12 +204,19 @@ it.
 ## `refresh-toolchain.py`, for mc-bump maintainers
 
 Rebuilds [the toolchain table](Versions-and-compatibility#the-toolchain) from
-Fabric's example mod. A weekly workflow runs it; a mod never needs to.
+Fabric's example mod, reading each version at the commit that introduced it
+([how](Versions-and-compatibility#where-the-table-comes-from)). A weekly workflow
+runs it; a mod never needs to. Needs git and the network.
 
 ```bash
 python3 scripts/refresh-toolchain.py            # rewrite lib/loaders/fabric_toolchain.json
 python3 scripts/refresh-toolchain.py --check    # exit 1 when it is out of date
+python3 scripts/refresh-toolchain.py --source ../fabric-example-mod --output /tmp/table.json
 ```
+
+It prints the versions it left out, such as `1.21.9: only backfilled by the
+generator, left out`. After a rewrite, run the tests: one of them refuses a table
+where a newer Minecraft would need an older toolchain.
 
 ---
 

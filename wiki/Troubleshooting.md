@@ -238,11 +238,6 @@ Upstream is down. Re-run.
 A **400** from Fabric meta is *not* an error. It is how Fabric says "I do not
 know that Minecraft version", and it becomes exit code `2`.
 
-### `no stable fabric-loom version found`
-
-The Fabric maven metadata listed nothing purely numeric. Pin one yourself with
-`--loom VERSION`, or `--buildtool VERSION`.
-
 ### `no stable fabric-loom release in the 1.17 line`
 
 The target Minecraft version needs that Loom line and Fabric's maven lists no
@@ -261,8 +256,15 @@ older one.
 ### The pull request says `unchanged, no toolchain known for Minecraft ...`
 
 Not an error: the target is older than every entry of
-[the toolchain table](Versions-and-compatibility#the-toolchain), so the build
-plugin and the wrapper are left as they are.
+[the toolchain table](Versions-and-compatibility#the-toolchain) (`1.14.4`), so
+the build plugin and the wrapper are left as they are.
+
+### The update moved Loom or Gradle further than you expected
+
+The table says what Fabric built each version with when it came out, see
+[where the table comes from](Versions-and-compatibility#where-the-table-comes-from).
+If the target lists a newer line than yours, the update moves to it; if it is
+wrong for your mod, pin the build plugin with `--loom VERSION`.
 
 ### `cannot read the toolchain table ...`
 
@@ -274,6 +276,12 @@ That is a broken mc-bump, not a problem in your mod: re-run, or report it.
 The target needs a newer Gradle, and your wrapper does not name a
 `gradle-<version>-bin.zip` or `-all.zip` distribution mc-bump could rewrite.
 Update it yourself with `./gradlew wrapper --gradle-version <version>`.
+
+### `cannot reach https://services.gradle.org/...` or `unexpected checksum from ...`
+
+Your wrapper pins a `distributionSha256Sum`, and the checksum of the new Gradle
+could not be read from Gradle's site. Nothing was written: the update stops
+before touching any file. Re-run.
 
 ---
 
