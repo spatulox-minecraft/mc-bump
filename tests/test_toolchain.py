@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 import unittest
+from unittest import mock
 
 from lib.common import Failure
 from lib.gradle import gradle_version_key
-from lib.loaders.fabric import TOOLCHAIN_TABLE
+from lib.loaders.base import BuildEnv
+from lib.loaders.fabric import LOOM_METADATA, LOOM_MODULE, TOOLCHAIN_TABLE, FabricLoader
 from lib.toolchain import (
     Requirements,
     Toolchain,
@@ -185,6 +187,63 @@ class PlanTest(unittest.TestCase):
         with self.assertRaises(Failure) as caught:
             self.plan("26.2", "1.17.18", "9.5.1", java=21, pinned="1.18.1")
         self.assertIn("Java >= 25", str(caught.exception))
+
+
+def loom_module(gradle, java):
+    return json.dumps({
+        "variants": [
+            {"name": "apiElements", "attributes": {"org.gradle.jvm.version": 8}},
+            {"name": "runtimeElements", "attributes": {
+                "org.gradle.plugin.api-version": gradle, "org.gradle.jvm.version": java,
+            }},
+        ]
+    })
+
+
+class FabricLoomTest(unittest.TestCase):
+    """What FabricLoader reads from Fabric's Maven, without the network."""
+
+    def setUp(self):
+        self.documents = {
+            LOOM_METADATA: "<metadata><versioning><versions>"
+            + "".join(f"<version>{v}</version>" for v in [*STABLE, "1.18.0-alpha.4"])
+            + "</versions></versioning></metadata>",
+            **{
+                LOOM_MODULE.format(v=version): loom_module(req.gradle, req.java)
+                for version, req in REQUIREMENTS.items()
+            },
+        }
+        self.fetched: list[str] = []
+        patcher = mock.patch("lib.loaders.fabric.http_get", side_effect=self.http_get)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.loader = FabricLoader()
+
+    def http_get(self, url, allow_status=()):
+        self.fetched.append(url)
+        return self.documents.get(url, "<html>404 Not Found</html>")
+
+    def test_the_runtime_variant_says_what_loom_needs(self):
+        self.assertEqual(
+            self.loader._loom_requirements("1.18.1"), Requirements(gradle="9.7.0", java=25)
+        )
+
+    def test_a_missing_or_odd_module_is_unknown(self):
+        self.assertIsNone(self.loader._loom_requirements("1.16.0"))
+        self.documents[LOOM_MODULE.format(v="1.16.1")] = json.dumps({"variants": []})
+        self.assertIsNone(self.loader._loom_requirements("1.16.1"))
+        self.documents[LOOM_MODULE.format(v="1.16.2")] = loom_module("9.4.0", "21")
+        self.assertEqual(self.loader._loom_requirements("1.16.2"), Requirements(gradle="9.4.0"))
+
+    def test_each_module_is_read_once_per_run(self):
+        """The Loom picked is asked for its Java, then for its Gradle."""
+        plan = self.loader._toolchain(
+            "26.2", BuildEnv(buildtool="1.15.4", gradle="9.3.0", java=25), None
+        )
+        self.assertEqual((plan.buildtool, plan.gradle), ("1.17.21", "9.5.1"))
+        self.loader._toolchain("26.2", BuildEnv(buildtool="1.15.4", gradle="9.3.0", java=25), None)
+        modules = [url for url in self.fetched if url.endswith(".module")]
+        self.assertEqual(modules, [LOOM_MODULE.format(v="1.17.21")])
 
 
 class ExampleModParsingTest(unittest.TestCase):

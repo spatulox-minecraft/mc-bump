@@ -15,7 +15,7 @@ from xml.etree import ElementTree
 
 from ..common import Failure, get_json, http_get
 from ..gradle import ModPaths, read_json, write_json
-from ..toolchain import Requirements, load_table, plan_toolchain
+from ..toolchain import Requirements, Toolchain, load_table, plan_toolchain
 from ..versions import parse_version
 from .base import BuildEnv, Loader, Resolved, Rung
 
@@ -85,6 +85,13 @@ class FabricLoader(Loader):
         "buildtool": "loom_version",
     }
 
+    def __init__(self) -> None:
+        # One update reads the module of the Loom it picks twice (its Java, then
+        # its Gradle), and neither the table nor a published module changes
+        # during a run.
+        self._requirements: dict[str, Requirements | None] = {}
+        self._table: dict[str, Toolchain] | None = None
+
     # -- resolution --------------------------------------------------------
     def resolve(
         self,
@@ -118,9 +125,11 @@ class FabricLoader(Loader):
         raise Failure(f"'{role}' is not an escalation rung of the fabric loader")
 
     def _toolchain(self, minecraft_version: str, env: BuildEnv, pinned: str | None):
+        if self._table is None:
+            self._table = load_table(TOOLCHAIN_TABLE)
         return plan_toolchain(
             minecraft=minecraft_version,
-            table=load_table(TOOLCHAIN_TABLE),
+            table=self._table,
             current_buildtool=env.buildtool,
             current_gradle=env.gradle,
             java=env.java,
@@ -176,6 +185,11 @@ class FabricLoader(Loader):
         return newest.get("version_number")
 
     def _loom_requirements(self, version: str) -> Requirements | None:
+        if version not in self._requirements:
+            self._requirements[version] = self._read_loom_module(version)
+        return self._requirements[version]
+
+    def _read_loom_module(self, version: str) -> Requirements | None:
         """Read from the Gradle Module Metadata Fabric publishes with each Loom.
 
         Its runtime variant carries the exact attributes Gradle matches the plugin
